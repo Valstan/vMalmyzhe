@@ -69,6 +69,8 @@ export interface Config {
   collections: {
     pages: Page;
     posts: Post;
+    sections: Section;
+    banners: Banner;
     media: Media;
     users: User;
     'payload-kv': PayloadKv;
@@ -80,6 +82,8 @@ export interface Config {
   collectionsSelect: {
     pages: PagesSelect<false> | PagesSelect<true>;
     posts: PostsSelect<false> | PostsSelect<true>;
+    sections: SectionsSelect<false> | SectionsSelect<true>;
+    banners: BannersSelect<false> | BannersSelect<true>;
     media: MediaSelect<false> | MediaSelect<true>;
     users: UsersSelect<false> | UsersSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
@@ -219,10 +223,18 @@ export interface Post {
    */
   date?: string | null;
   /**
-   * Необязательная текстовая метка рубрики.
+   * Старая текстовая метка. Для новых постов используйте поле «Рубрика» (связь).
    */
   category?: string | null;
+  /**
+   * Рубрика портала. Ingest проставляет её по slug от классификатора.
+   */
+  section?: (number | null) | Section;
   cover?: (number | null) | Media;
+  /**
+   * Все фото поста (ingest перекладывает медиа из ВК к нам).
+   */
+  gallery?: (number | Media)[] | null;
   content?: {
     root: {
       type: string;
@@ -243,9 +255,67 @@ export interface Post {
    * Заполняется автоматически из заголовка. Можно переопределить вручную.
    */
   slug?: string | null;
+  source?: {
+    /**
+     * Ключ идемпотентности ingest — повторная доставка не создаёт дубль.
+     */
+    vkPostId?: string | null;
+    sourceUrl?: string | null;
+  };
   updatedAt: string;
   createdAt: string;
   _status?: ('draft' | 'published') | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "sections".
+ */
+export interface Section {
+  id: number;
+  title: string;
+  /**
+   * Необязательный подзаголовок для страницы рубрики.
+   */
+  description?: string | null;
+  /**
+   * Меньше — выше в меню/списках.
+   */
+  order?: number | null;
+  /**
+   * Заполняется автоматически из заголовка. Можно переопределить вручную.
+   */
+  slug: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "banners".
+ */
+export interface Banner {
+  id: number;
+  title: string;
+  zone: 'header' | 'sidebar' | 'feed';
+  image: number | Media;
+  link: string;
+  /**
+   * Пусто — без ограничения снизу.
+   */
+  startDate?: string | null;
+  /**
+   * Пусто — без ограничения сверху.
+   */
+  endDate?: string | null;
+  /**
+   * Ручной выключатель поверх периода показа.
+   */
+  active?: boolean | null;
+  /**
+   * Инкрементируется redirect-роутом, вручную не править.
+   */
+  clicks?: number | null;
+  updatedAt: string;
+  createdAt: string;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -305,6 +375,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'posts';
         value: number | Post;
+      } | null)
+    | ({
+        relationTo: 'sections';
+        value: number | Section;
+      } | null)
+    | ({
+        relationTo: 'banners';
+        value: number | Banner;
       } | null)
     | ({
         relationTo: 'media';
@@ -378,13 +456,49 @@ export interface PostsSelect<T extends boolean = true> {
   title?: T;
   date?: T;
   category?: T;
+  section?: T;
   cover?: T;
+  gallery?: T;
   content?: T;
   publishedAt?: T;
   slug?: T;
+  source?:
+    | T
+    | {
+        vkPostId?: T;
+        sourceUrl?: T;
+      };
   updatedAt?: T;
   createdAt?: T;
   _status?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "sections_select".
+ */
+export interface SectionsSelect<T extends boolean = true> {
+  title?: T;
+  description?: T;
+  order?: T;
+  slug?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "banners_select".
+ */
+export interface BannersSelect<T extends boolean = true> {
+  title?: T;
+  zone?: T;
+  image?: T;
+  link?: T;
+  startDate?: T;
+  endDate?: T;
+  active?: T;
+  clicks?: T;
+  updatedAt?: T;
+  createdAt?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema

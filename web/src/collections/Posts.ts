@@ -42,10 +42,20 @@ export const Posts: CollectionConfig<'posts'> = {
     {
       name: 'category',
       type: 'text',
-      label: 'Рубрика',
+      label: 'Рубрика (текстом, legacy)',
       admin: {
         position: 'sidebar',
-        description: 'Необязательная текстовая метка рубрики.',
+        description: 'Старая текстовая метка. Для новых постов используйте поле «Рубрика» (связь).',
+      },
+    },
+    {
+      name: 'section',
+      type: 'relationship',
+      label: 'Рубрика',
+      relationTo: 'sections',
+      admin: {
+        position: 'sidebar',
+        description: 'Рубрика портала. Ingest проставляет её по slug от классификатора.',
       },
     },
     {
@@ -53,6 +63,16 @@ export const Posts: CollectionConfig<'posts'> = {
       type: 'upload',
       label: 'Обложка',
       relationTo: 'media',
+    },
+    {
+      name: 'gallery',
+      type: 'upload',
+      label: 'Галерея',
+      relationTo: 'media',
+      hasMany: true,
+      admin: {
+        description: 'Все фото поста (ingest перекладывает медиа из ВК к нам).',
+      },
     },
     {
       name: 'content',
@@ -68,6 +88,40 @@ export const Posts: CollectionConfig<'posts'> = {
       },
     },
     slugField(),
+    // Источник поста в ВК (конвейер Сарафана, news-portal-concept §3).
+    // Для перенесённых из ВК постов sourceUrl обязателен — атрибуция оригинала
+    // (страховка по читательскому/перепечатанному контенту, концепт §9).
+    {
+      name: 'source',
+      type: 'group',
+      label: 'Источник (ВК)',
+      admin: {
+        position: 'sidebar',
+      },
+      fields: [
+        {
+          name: 'vkPostId',
+          type: 'text',
+          label: 'VK post ID',
+          unique: true,
+          index: true,
+          admin: {
+            description: 'Ключ идемпотентности ingest — повторная доставка не создаёт дубль.',
+          },
+        },
+        {
+          name: 'sourceUrl',
+          type: 'text',
+          label: 'Ссылка на оригинал',
+          validate: (value: string | null | undefined, { siblingData }: { siblingData?: { vkPostId?: string | null } }) => {
+            if (siblingData?.vkPostId && !value) {
+              return 'Для поста из ВК обязательна ссылка на оригинал.'
+            }
+            return true
+          },
+        },
+      ],
+    },
   ],
   hooks: {
     beforeChange: [populatePublishedAt],
