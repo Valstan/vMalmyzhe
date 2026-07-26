@@ -2,6 +2,7 @@ import type { CollectionConfig } from 'payload'
 
 import { adminOrEditor } from '../access/adminOrEditor'
 import { anyone } from '../access/anyone'
+import { revalidatePortal, revalidatePortalDelete } from '../hooks/revalidatePortal'
 
 // Рекламные баннеры (M0 news-portal-concept §5). Прямые размещения без внешних
 // ad-сетей: зона показа, период, картинка, ссылка. Клики считает redirect-роут
@@ -96,4 +97,10 @@ export const Banners: CollectionConfig = {
       },
     },
   ],
+  hooks: {
+    // Инкремент clicks из redirect-роута идёт с context.disableRevalidate —
+    // клики не должны сбрасывать ISR-кэш витрины.
+    afterChange: [revalidatePortal],
+    afterDelete: [revalidatePortalDelete],
+  },
 }

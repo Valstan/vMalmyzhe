@@ -29,6 +29,8 @@ export async function GET(
       collection: 'banners',
       id: numericId,
       data: { clicks: (banner.clicks ?? 0) + 1 },
+      // Клик — не редакционная правка: ISR-кэш не трогаем.
+      context: { disableRevalidate: true },
     })
   } catch (error) {
     payload.logger.warn(`banner ${numericId} click counter failed: ${String(error)}`)
