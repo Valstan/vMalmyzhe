@@ -2,18 +2,30 @@
 
 > Sticky-note для непрерывности сессий. Перезаписывается `/close_session`. История — `git log -- docs/SESSION_HANDOFF.md`.
 
-**Status:** IDLE
-**Updated:** 2026-07-21 (bootstrap: проект подключён к Мозгу — mailbox + session-скиллы)
+**Status:** ACTIVE — новостной портал (mandate brain 2026-07-26)
+**Updated:** 2026-07-26 (сессия kickoff: M0+M1 задеплоены на прод)
 **Branch:** main
 
 ## Текущая нитка
 
-Активной нитки разработки нет. Сайт **вмалмыже.рф** живёт на проде (Бокс 1, :3004), каркас Next+Payload готов, **ждёт наполнения контентом владельцем** (из ВК) — осознанная пауза by design.
+**Новостной портал Малмыжа** (концепт ADR-0007 в brain: `docs/plans/vmalmyzhe-news-portal-concept.md`). Пауза «ждёт контента» снята mandate-письмом `2026-07-26-news-portal-kickoff`. **M0 и M1 живут на проде.**
 
-## Что сделано (bootstrap 2026-07-21)
+## Что сделано (2026-07-26)
 
-- Проект подключён к экосистеме brain_matrica: `CLAUDE.md`, session-скиллы `/start` + `/close_session`, `mailbox/to-brain/`, `docs/SESSION_HANDOFF.md`. Brain-сторона: `../brain_matrica/mailboxes/vMalmyzhe/from-brain/`.
+- **M0** (PR #4): `sections` (7 seed-рубрик, slug для классификатора) + `banners` + у `posts` связь `section`/`gallery`/`source` (vkPostId unique = идемпотентность). `POST /api/ingest/posts` под `GATEWAY_KEY_VMALMYZHE` — всегда draft, медиа перекладывает к нам. Миграция `20260726_141845_m0_news_portal` применена на прод-БД.
+- **M1** (PR #6): витрина — главная-лента, `/news` + пагинация `/news/page/[n]`, рубрики `/news/section/[slug]`, `/search`, баннерные зоны + клик-редирект `/api/banners/[id]/click`, JSON-LD/OG/sitemap, ISR-ревалидация справочников.
+- Инфра: ключ `GATEWAY_KEY_VMALMYZHE` в `/etc/vmalmyzhe/vmalmyzhe.env` (Бокс 1); `apply-migration.yml` починен (PR #5 — sudo для env 600 root).
+- Письма brain: ack + отчёт M1 (`mailbox/to-brain/2026-07-26-*`).
 
 ## Следующий шаг
 
-Ждём решения/контента владельца по наполнению сайта. Разработка — отдельным оформлением/контентом (реш. владельца, см. концепт малмыж-кластера в Мозге).
+1. **Ждём Сарафан** (сторона brain/setka): передать им ключ + контракт ingest → конвейер ВК→портал оживёт (посты draft'ами, publish руками). Единственный блокер контента.
+2. **M2** (наша, после метрик setka): автопубликация доверенных рубрик, enforcing классификатора.
+3. **M3**: раздел «Сервисы» из каталога setka, ЕСА-вход, карточка в `/services` (постулат 37).
+4. Мелочь по желанию владельца: рубрики финализировать по живой статистике, тексты глобалов (home/header/footer) в админке.
+
+## Грабли сессии (чтоб не наступать)
+
+- `payload migrate:create` без drizzle-снапшота генерит ПОЛНУЮ схему — инкремент писать руками (сн. `20260726_141845_m0_news_portal.json` теперь закоммичен, следующий autogen должен диффать).
+- Кириллица через `curl -d '...'` из Windows-шелла едет в БД mojibake — тестовые JSON писать в файлы (UTF-8) и слать `--data-binary @file`.
+- Прод-домен с этой машины по HTTPS не отвечает (локальная сеть) — проверять через `ssh GONBA curl localhost:3004`.
