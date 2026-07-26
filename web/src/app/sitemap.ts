@@ -53,5 +53,20 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   await collect('pages', '/pages')
   await collect('posts', '/news')
 
+  // Рубрики (без версий/_status — фильтр не нужен).
+  try {
+    const res = await payload.find({ collection: 'sections', depth: 0, limit: 100, pagination: false })
+    for (const doc of res.docs as Doc[]) {
+      if (!doc.slug) continue
+      entries.push({
+        url: `${baseUrl}/news/section/${encodeURIComponent(doc.slug)}`,
+        changeFrequency: 'daily',
+        priority: 0.7,
+      })
+    }
+  } catch (e) {
+    console.error('[sitemap] sections query failed:', e)
+  }
+
   return entries
 }

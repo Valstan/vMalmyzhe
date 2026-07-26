@@ -2,6 +2,7 @@ import type { CollectionConfig, TextField } from 'payload'
 
 import { adminOrEditor } from '../access/adminOrEditor'
 import { anyone } from '../access/anyone'
+import { revalidatePortal, revalidatePortalDelete } from '../hooks/revalidatePortal'
 import { slugField } from '../fields/slug'
 
 // Рубрики новостного портала (M0 news-portal-concept §4). Управляемый список,
@@ -51,4 +52,8 @@ export const Sections: CollectionConfig = {
     // Классификатор адресует рубрику по slug — он обязателен и уникален.
     { ...(slugField() as TextField), required: true, unique: true },
   ],
+  hooks: {
+    afterChange: [revalidatePortal],
+    afterDelete: [revalidatePortalDelete],
+  },
 }

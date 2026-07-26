@@ -1,62 +1,42 @@
-import Link from 'next/link'
-import config from '@payload-config'
-import { getPayload } from 'payload'
+import { notFound } from 'next/navigation'
 
-import { withRetry } from '../../../lib/withRetry'
-import { formatPostDate } from '../../../lib/format'
+import { findPosts, getSectionBySlug, getSections, POSTS_PER_PAGE } from '../../../lib/portal'
+import { getFeedBanners } from '../components/BannerSlot'
+import { Pagination, PostList, SectionChips } from '../components/PostList'
 
-type PostListItem = {
-  id: string | number
-  title?: string | null
-  slug?: string | null
-  date?: string | null
-  publishedAt?: string | null
-  category?: string | null
-}
+// Лента новостей (M1): вся лента и лента рубрики, с пагинацией по статичным
+// путям (/news/page/[n], /news/section/[slug]/page/[n]) — ISR-friendly.
 
-async function getPosts(): Promise<PostListItem[]> {
-  try {
-    return await withRetry(async () => {
-      const payload = await getPayload({ config })
-      const res = await payload.find({
-        collection: 'posts',
-        where: { _status: { equals: 'published' } },
-        sort: '-date',
-        depth: 0,
-        limit: 100,
-      })
-      return res.docs as PostListItem[]
-    })
-  } catch {
-    return []
-  }
-}
+export async function NewsView({
+  sectionSlug,
+  page = 1,
+}: {
+  sectionSlug?: string
+  page?: number
+} = {}) {
+  const section = sectionSlug ? await getSectionBySlug(decodeURIComponent(sectionSlug)) : null
+  if (sectionSlug && !section) notFound()
 
-export async function NewsView() {
-  const posts = await getPosts()
+  const [sections, feedBanners, { docs, totalPages }] = await Promise.all([
+    getSections(),
+    getFeedBanners(),
+    findPosts({ sectionId: section?.id, page, limit: POSTS_PER_PAGE }),
+  ])
+  if (page > 1 && docs.length === 0) notFound()
+
+  const base = section ? `/news/section/${encodeURIComponent(section.slug ?? '')}` : '/news'
 
   return (
     <section>
-      <h1>Новости</h1>
-      {posts.length === 0 ? (
-        <p className="muted">Пока нет новостей.</p>
-      ) : (
-        <ul className="post-list">
-          {posts.map((post) => (
-            <li key={post.id} className="post-list__item">
-              <h2>
-                <Link href={`/news/${encodeURIComponent(post.slug ?? '')}`}>
-                  {post.title || 'Без заголовка'}
-                </Link>
-              </h2>
-              <p className="post-list__meta">
-                {formatPostDate(post.date || post.publishedAt)}
-                {post.category ? ` · ${post.category}` : ''}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
+      <h1>{section ? section.title : 'Новости'}</h1>
+      {section?.description ? <p className="muted">{section.description}</p> : null}
+      <SectionChips sections={sections} activeSlug={section?.slug ?? undefined} />
+      <PostList posts={docs} heading="h2" feedExtras={feedBanners} />
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        makeHref={(n) => (n === 1 ? base : `${base}/page/${n}`)}
+      />
     </section>
   )
 }

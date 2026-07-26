@@ -21,7 +21,12 @@ export function SiteChrome({
   children: React.ReactNode
 }) {
   const brand = chrome?.brand || SITE_NAME
-  const nav = chrome?.nav?.length ? chrome.nav : [{ label: 'Новости', href: '/news' }]
+  const nav = chrome?.nav?.length
+    ? chrome.nav
+    : [
+        { label: 'Новости', href: '/news' },
+        { label: 'Поиск', href: '/search' },
+      ]
   const copyright = chrome?.copyright || `© ${new Date().getFullYear()} ${SITE_NAME}`
 
   return (
