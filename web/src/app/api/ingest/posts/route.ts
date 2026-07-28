@@ -21,7 +21,8 @@ import config from '../../../../payload.config'
 //
 // Поведение: всегда draft (автопубликации нет до enforcing-метрики, mandate
 // 07-26); повторная доставка того же vkPostId не дублирует — draft обновляется,
-// published не трогается.
+// published не трогается. Рубрика при повторе не перезаписывается — она
+// принадлежит редактору; пустая дозаполняется (#095).
 
 const MAX_IMAGES = 10
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024
@@ -194,10 +195,20 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (existingPost) {
     // Draft уже есть — обновляем содержимое (правки поста в ВК доезжают),
     // медиа при повторе не дублируем: новые файлы заменяют список целиком.
+    //
+    // Рубрику при повторе НЕ перезаписываем (#095, проверка слоёв 07-28):
+    // классификатор даёт догадку, дальше поле принадлежит редактору — иначе
+    // ручное исправление мисклассификации откатывается следующей же доставкой
+    // того же vkPostId. Пустую рубрику дозаполнить можно: так пост, приехавший
+    // с ещё не заведённым slug'ом, получит её, когда рубрика появится.
     const updated = await payload.update({
       collection: 'posts',
       id: existingPost.id,
-      data: mediaIds.length ? data : { ...data, cover: undefined, gallery: undefined },
+      data: {
+        ...data,
+        section: existingPost.section ? undefined : sectionId,
+        ...(mediaIds.length ? {} : { cover: undefined, gallery: undefined }),
+      },
       draft: true,
     })
     return NextResponse.json(
