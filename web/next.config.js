@@ -10,6 +10,9 @@ const NEXT_PUBLIC_SERVER_URL =
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Позволяет агентам и локальным проверкам запускать изолированную сборку,
+  // не мешая уже работающему dev-серверу соседнего проекта.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // Прод-VPS (мало RAM) не тянет `next build` (OOM). Сборка едет в CI
   // (GitHub Actions, ubuntu), на сервер кладём готовый standalone-сервер.
   // tracingRoot = web/ — чтобы server.js лёг в корень .next/standalone.
