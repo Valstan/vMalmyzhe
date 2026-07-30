@@ -109,7 +109,7 @@ export async function PostView({ slug }: { slug: string }) {
     <article>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, '\\u003c') }}
       />
       <h1>{post.title}</h1>
       <p className="post-list__meta">

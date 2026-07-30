@@ -25,18 +25,34 @@ export function SiteChrome({
     ? chrome.nav
     : [
         { label: 'Новости', href: '/news' },
+        { label: 'Афиша', href: '/news/section/afisha' },
+        { label: 'Объявления', href: '/news/section/obyavleniya' },
+        { label: 'Культура и спорт', href: '/news/section/kultura-sport' },
+        { label: 'История Малмыжа', href: '/news/section/istoriya-malmyzha' },
         { label: 'Поиск', href: '/search' },
       ]
   const copyright = chrome?.copyright || `© ${new Date().getFullYear()} ${SITE_NAME}`
 
   return (
     <div className="site">
+      <div className="utility-bar">
+        <div className="container utility-bar__inner">
+          <span>Малмыж и Малмыжский район</span>
+          <span className="utility-bar__message">Всё важное — рядом</span>
+          <a href="tel:112">Экстренные службы: 112</a>
+        </div>
+      </div>
       <header className="site-header">
         <div className="container site-header__inner">
           <Link href="/" className="site-brand">
-            {brand}
+            <span className="site-brand__name">{brand}</span>
+            <span className="site-brand__tagline">Город, район, наши люди</span>
           </Link>
-          <nav className="site-nav">
+          <form className="header-search" action="/search" role="search">
+            <input name="q" type="search" aria-label="Поиск по сайту" placeholder="Найти новость, событие, организацию" />
+            <button type="submit" aria-label="Искать">⌕</button>
+          </form>
+          <nav className="site-nav" aria-label="Основная навигация">
             {nav.map((item, i) => (
               <Link key={`${item.href}-${i}`} href={item.href}>
                 {item.label}
@@ -49,9 +65,31 @@ export function SiteChrome({
       <main className="site-main container">{children}</main>
 
       <footer className="site-footer">
-        <div className="container">
-          {chrome?.contacts ? <p className="site-footer__contacts">{chrome.contacts}</p> : null}
+        <div className="container site-footer__grid">
+          <div>
+            <div className="site-footer__brand">{brand}</div>
+            <p>Местный портал для жителей Малмыжа и Малмыжского района.</p>
+          </div>
+          <div>
+            <strong>Разделы</strong>
+            <Link href="/news">Новости</Link>
+            <Link href="/news/section/afisha">Афиша</Link>
+            <Link href="/news/section/obyavleniya">Объявления</Link>
+          </div>
+          <div>
+            <strong>Портал</strong>
+            <Link href="/search">Поиск</Link>
+            <Link href="/pages/o-proekte">О проекте</Link>
+            <Link href="/pages/reklama">Разместить рекламу</Link>
+          </div>
+          <div>
+            <strong>Связаться</strong>
+            {chrome?.contacts ? <p className="site-footer__contacts">{chrome.contacts}</p> : <p>Предложить новость или событие</p>}
+          </div>
+        </div>
+        <div className="container site-footer__bottom">
           <p className="site-footer__copyright">{copyright}</p>
+          <span>Сделано с заботой о нашем районе</span>
         </div>
       </footer>
     </div>

@@ -37,6 +37,7 @@ jspm_packages/
 
 # Next.js build output
 .next
+.next-codex
 out
 dist
 .output
