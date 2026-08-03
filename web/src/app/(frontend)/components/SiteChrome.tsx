@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import React from 'react'
 
-import { SITE_NAME } from '../../../lib/site'
+import { SERVICES_CATALOG_URL, SITE_NAME } from '../../../lib/site'
 
 export type NavItem = { label: string; href: string }
 export type ChromeContent = {
@@ -52,6 +52,20 @@ export function SiteChrome({
             <input name="q" type="search" aria-label="Поиск по сайту" placeholder="Найти новость, событие, организацию" />
             <button type="submit" aria-label="Искать">⌕</button>
           </form>
+          {/* Кнопка в каталог сервисов экосистемы — п.3 стандарта онбординга
+              (внешний домен, поэтому обычный <a>, а не next/link). */}
+          <a className="services-cta" href={SERVICES_CATALOG_URL}>
+            <span className="services-cta__icon" aria-hidden="true">
+              ✦
+            </span>
+            <span className="services-cta__text">
+              <strong>Сервисы вМалмыже.рф</strong>
+              <small>Все городские сервисы — в одном каталоге</small>
+            </span>
+            <span className="services-cta__arrow" aria-hidden="true">
+              →
+            </span>
+          </a>
           <nav className="site-nav" aria-label="Основная навигация">
             {nav.map((item, i) => (
               <Link key={`${item.href}-${i}`} href={item.href}>
