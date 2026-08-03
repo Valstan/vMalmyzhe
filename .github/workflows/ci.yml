@@ -1,0 +1,56 @@
+name: CI
+
+# Гейты на PR. Заведено 2026-08-03 по ревизии #104.
+#
+# До этого автоматических проверок на PR не было вовсе: lint и typecheck гонял
+# вручную агент на своей машине, а единственная машинная проверка (`next build`)
+# стояла в деплое — то есть УЖЕ ПОСЛЕ мержа в main, когда изменение едет на прод.
+# «Гейты зелёные» означало «агент вспомнил их запустить». Забыл — никто не узнал.
+#
+# Красный прогон каждого гейта показан вживую (приёмочный критерий #104):
+#   test      — вернули баг «publish не проставляет _status» → exit 1
+#   typecheck — присвоили строку в number                    → exit 2
+#   lint      — нарушили rules-of-hooks                      → exit 1
+#
+# build здесь намеренно НЕ гоняем: Payload лезет в БД на пререндере, поднимать
+# Postgres в CI ради этого дороже пользы — сборка проверяется в deploy-prod.yml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Enable corepack + pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.15.0 --activate
+
+      - name: Install deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: web
+        run: pnpm lint
+
+      - name: Typecheck
+        working-directory: web
+        run: pnpm typecheck
+
+      - name: Tests
+        working-directory: web
+        run: pnpm test
