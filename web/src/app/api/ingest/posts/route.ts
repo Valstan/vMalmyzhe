@@ -29,8 +29,17 @@ import config from '../../../../payload.config'
 // Поведение: по умолчанию draft (автопубликации нет до enforcing-метрики,
 // mandate 07-26) — автоматический конвейер Сарафана флаг не шлёт, и эта гарантия
 // для него сохраняется без изменений. `publish: true` — осознанное действие
-// оператора под тем же ключом: заведено по прямому заказу владельца 08-03
-// (наполнение портала из «Малмыж-Инфо» силами сессии, письмо в brain отправлено).
+// оператора, заведено по прямому заказу владельца 08-03 (наполнение портала из
+// «Малмыж-Инфо» силами сессии).
+//
+// ⚠️ Публикация требует ВТОРОГО секрета `INGEST_PUBLISH_KEY` в заголовке
+// `X-Publish-Key` (#107, предупреждение brain в G211-письме 07-31): общий ключ
+// шлюза доказывает, что предъявитель — «шлюз», и ничего не доказывает про право
+// публиковать. Пока ingest был всегда-draft, это гасилось конструктивно; с
+// появлением флага «всегда draft» перестал быть последней линией, поэтому
+// способность публиковать отделена от способности присылать. Ключа нет или он
+// неверен — пост всё равно создаётся, но черновиком, и в ответ идёт warning
+// (деградация безопасная, доставка контента не теряется).
 // Повторная доставка того же vkPostId не дублирует — draft обновляется,
 // published не трогается. Рубрика при повторе не перезаписывается — она
 // принадлежит редактору; пустая дозаполняется (#095).
@@ -38,6 +47,18 @@ import config from '../../../../payload.config'
 const MAX_IMAGES = 10
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024
 const FETCH_TIMEOUT_MS = 20_000
+
+// Constant-time сравнение секрета из заголовка с ожидаемым.
+const matches = (given: string, expected: string | undefined): boolean => {
+  if (!expected) return false
+  const a = Buffer.from(given)
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
+// Право публиковать — отдельный секрет, не тот, которым авторизуется доставка.
+const mayPublish = (request: Request): boolean =>
+  matches(request.headers.get('x-publish-key') ?? '', process.env.INGEST_PUBLISH_KEY)
 
 const isAuthorized = (request: Request): boolean => {
   const key = process.env.GATEWAY_KEY_VMALMYZHE
@@ -178,7 +199,11 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const payload = await getPayload({ config })
   const warnings: string[] = []
-  const publish = body.publish === true
+  let publish = body.publish === true
+  if (publish && !mayPublish(request)) {
+    publish = false
+    warnings.push('publish ignored: valid X-Publish-Key required, saved as draft')
+  }
   const videos = normalizeVideos(body.videos, warnings)
 
   // Рубрика по slug от классификатора; неизвестный slug — не ошибка (draft
