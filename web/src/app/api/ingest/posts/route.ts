@@ -248,6 +248,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const data = {
+    // Одного `draft: false` мало: при включённых versions.drafts Payload берёт
+    // состояние из data._status, и без него документ остаётся черновиком.
+    ...(publish ? { _status: 'published' as const } : {}),
     title,
     date: body.date || undefined,
     // Дата публикации = дата оригинала, если её прислали: иначе populatePublishedAt
