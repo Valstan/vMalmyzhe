@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import React from 'react'
 
-import { AUTHOR_NAME, AUTHOR_URL, SERVICES_CATALOG_URL, SITE_NAME } from '../../../lib/site'
+import { AUTHOR_CREDIT, AUTHOR_URL, SERVICES_CATALOG_URL, SITE_NAME } from '../../../lib/site'
 
 export type NavItem = { label: string; href: string }
 export type ChromeContent = {
@@ -105,10 +105,11 @@ export function SiteChrome({
           <p className="site-footer__copyright">{copyright}</p>
           {/* Подпись автора — п.4 стандарта онбординга (mandate 2026-08-01). */}
           <span className="site-footer__author">
-            Сделано с заботой о нашем районе — программистом{' '}
+            Сделано с заботой о нашем районе. (с){' '}
             <a href={AUTHOR_URL} rel="author noopener" target="_blank">
-              {AUTHOR_NAME}
+              {AUTHOR_CREDIT}
             </a>
+            , {new Date().getFullYear()}
           </span>
         </div>
       </footer>
