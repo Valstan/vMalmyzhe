@@ -158,6 +158,9 @@ img {
 .site-footer__grid { display: grid; grid-template-columns: 1.5fr repeat(3, 1fr); gap: 3rem; }
 .site-footer__brand { color: #fff; font: 700 1.7rem Georgia, serif; }
 .site-footer__bottom { border-top: 1px solid rgba(255,255,255,.16); margin-top: 2rem; padding-top: 1rem; display: flex; justify-content: space-between; gap: 1rem; font-size: .78rem; }
+/* Ссылка на автора идёт внутри строки, а `.site-footer a` выше — block. */
+.site-footer__author a { display: inline; margin-top: 0; font-size: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+.site-footer__author a:hover { color: var(--color-gold); }
 
 .site-footer__contacts {
   white-space: pre-line;
