@@ -17,10 +17,21 @@ import config from '../../../../payload.config'
 //   date?:     string   — ISO-дата оригинального поста
 //   images?:   Array<string | { url: string; alt?: string }> — медиа
 //                        перекладываем к себе (ВК-CDN протухает, урок G56/G63)
+//   videos?:   Array<string | { url: string; title?: string }> — видео НЕ
+//                        перекладываем: ссылка на плеер ВК дописывается в конец
+//                        текста (решение владельца 08-03 — без тяжёлых файлов
+//                        у нас и без миграции схемы; атрибуция сохраняется)
+//   publishedAt?: string — дата публикации; если не передана, Payload проставит
+//                        текущую (hook populatePublishedAt)
+//   publish?:  boolean  — ЯВНАЯ публикация вместо draft, см. ниже
 // }
 //
-// Поведение: всегда draft (автопубликации нет до enforcing-метрики, mandate
-// 07-26); повторная доставка того же vkPostId не дублирует — draft обновляется,
+// Поведение: по умолчанию draft (автопубликации нет до enforcing-метрики,
+// mandate 07-26) — автоматический конвейер Сарафана флаг не шлёт, и эта гарантия
+// для него сохраняется без изменений. `publish: true` — осознанное действие
+// оператора под тем же ключом: заведено по прямому заказу владельца 08-03
+// (наполнение портала из «Малмыж-Инфо» силами сессии, письмо в brain отправлено).
+// Повторная доставка того же vkPostId не дублирует — draft обновляется,
 // published не трогается. Рубрика при повторе не перезаписывается — она
 // принадлежит редактору; пустая дозаполняется (#095).
 
@@ -40,40 +51,89 @@ const isAuthorized = (request: Request): boolean => {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
-// Плейн-текст → минимальный lexical richText (абзац на каждую непустую строку).
-const textToLexical = (text: string) => ({
-  root: {
-    type: 'root',
-    direction: null,
-    format: '' as const,
-    indent: 0,
-    version: 1,
-    children: text
-      .split(/\r?\n+/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => ({
-        type: 'paragraph',
-        direction: null,
-        format: '' as const,
-        indent: 0,
-        version: 1,
-        children: [
-          {
-            type: 'text',
-            detail: 0,
-            format: 0,
-            mode: 'normal',
-            style: '',
-            text: line,
-            version: 1,
-          },
-        ],
-      })),
-  },
+// Узел lexical в том виде, в каком его ждёт сгенерированный тип поля richText.
+type LexNode = { [k: string]: unknown; type: string; version: number }
+
+const textNode = (text: string): LexNode => ({
+  type: 'text',
+  detail: 0,
+  format: 0,
+  mode: 'normal',
+  style: '',
+  text,
+  version: 1,
 })
 
+const paragraph = (children: LexNode[]): LexNode => ({
+  type: 'paragraph',
+  direction: null,
+  format: '' as const,
+  indent: 0,
+  version: 1,
+  children,
+})
+
+// Ссылка на плеер ВК: узел `link` — RichText.tsx его рендерит как <a>.
+const videoParagraph = (url: string, title?: string): LexNode =>
+  paragraph([
+    textNode('🎬 Видео: '),
+    {
+      type: 'link',
+      direction: null,
+      format: '' as const,
+      indent: 0,
+      version: 3,
+      fields: { url, newTab: true, linkType: 'custom' },
+      children: [textNode(title?.trim() || 'смотреть во ВКонтакте')],
+    },
+  ])
+
+// Плейн-текст + видео → минимальный lexical richText (абзац на непустую строку,
+// ссылки на видео — в конец, в том же порядке, в каком пришли из своего поста).
+const buildContent = (text: string, videos: { url: string; title?: string }[]) => {
+  const children: LexNode[] = text
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => paragraph([textNode(line)]))
+
+  for (const video of videos) children.push(videoParagraph(video.url, video.title))
+
+  return {
+    root: {
+      type: 'root',
+      direction: null,
+      format: '' as const,
+      indent: 0,
+      version: 1,
+      children,
+    },
+  }
+}
+
 type IncomingImage = string | { url: string; alt?: string }
+type IncomingVideo = string | { url: string; title?: string }
+
+const MAX_VIDEOS = 5
+
+// Видео приходят ссылками на плеер ВК — нормализуем и отбрасываем мусор.
+const normalizeVideos = (raw: unknown, warnings: string[]): { url: string; title?: string }[] => {
+  if (!Array.isArray(raw)) return []
+  const videos: { url: string; title?: string }[] = []
+  for (const [index, item] of (raw as IncomingVideo[]).entries()) {
+    if (videos.length >= MAX_VIDEOS) {
+      warnings.push(`videos truncated to ${MAX_VIDEOS}`)
+      break
+    }
+    const url = typeof item === 'string' ? item : item?.url
+    if (!url || !/^https?:\/\//i.test(url)) {
+      warnings.push(`video ${index}: invalid url`)
+      continue
+    }
+    videos.push({ url, title: typeof item === 'object' ? item?.title : undefined })
+  }
+  return videos
+}
 
 const extFromMime = (mime: string): string =>
   ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' })[mime] ??
@@ -95,6 +155,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     section?: string
     date?: string
     images?: IncomingImage[]
+    videos?: IncomingVideo[]
+    publishedAt?: string
+    publish?: boolean
   }
   try {
     body = await request.json()
@@ -115,6 +178,8 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const payload = await getPayload({ config })
   const warnings: string[] = []
+  const publish = body.publish === true
+  const videos = normalizeVideos(body.videos, warnings)
 
   // Рубрика по slug от классификатора; неизвестный slug — не ошибка (draft
   // поправит оператор), но сигналим в ответе.
@@ -185,8 +250,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   const data = {
     title,
     date: body.date || undefined,
+    // Дата публикации = дата оригинала, если её прислали: иначе populatePublishedAt
+    // проставит «сегодня», и трёхдневная новость выглядела бы свежей.
+    publishedAt: body.publishedAt || body.date || undefined,
     section: sectionId,
-    content: text ? textToLexical(text) : undefined,
+    content: text || videos.length ? buildContent(text, videos) : undefined,
     cover: mediaIds[0],
     gallery: mediaIds.length ? mediaIds : undefined,
     source: { vkPostId, sourceUrl },
@@ -209,10 +277,10 @@ export async function POST(request: Request): Promise<NextResponse> {
         section: existingPost.section ? undefined : sectionId,
         ...(mediaIds.length ? {} : { cover: undefined, gallery: undefined }),
       },
-      draft: true,
+      draft: !publish,
     })
     return NextResponse.json(
-      { created: false, updated: true, id: updated.id, warnings },
+      { created: false, updated: true, published: publish, id: updated.id, warnings },
       { status: 200 },
     )
   }
@@ -220,7 +288,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   const created = await payload.create({
     collection: 'posts',
     data,
-    draft: true,
+    draft: !publish,
   })
-  return NextResponse.json({ created: true, id: created.id, warnings }, { status: 201 })
+  return NextResponse.json(
+    { created: true, published: publish, id: created.id, warnings },
+    { status: 201 },
+  )
 }

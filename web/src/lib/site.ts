@@ -9,3 +9,10 @@ export const SITE_NAME = 'вМалмыже.РФ'
 
 export const SITE_DESC =
   'вМалмыже.РФ — городской портал Малмыжа и Малмыжского района: новости, события, объявления и полезная информация.'
+
+// Каталог сервисов экосистемы (ведёт setka/SARAFAN). Кнопка на него в шапке —
+// п.3 стандарта онбординга brain_matrica (docs/SERVICE_ONBOARDING.md, mandate
+// владельца 2026-07-26; триггер для портала — «при наполнении контентом»).
+// Адрес в punycode намеренно: кириллический URL бьётся в части клиентов и в CI,
+// живой домен — вход.вмалмыже.рф/services.
+export const SERVICES_CATALOG_URL = 'https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai/services'
