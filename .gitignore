@@ -51,3 +51,6 @@ dist
 .claude/scheduled_tasks.lock
 .codex/
 .gemini/
+
+# Рабочие файлы импортёра новостей (выгрузки ВК) — не коммитим.
+scripts/.work/

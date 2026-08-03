@@ -4,10 +4,12 @@ import { getPayload } from 'payload'
 import React from 'react'
 
 import './globals.css'
+import { getMetrikaStats } from '../../lib/metrika'
 import { SITE_DESC, SITE_NAME, SITE_URL } from '../../lib/site'
 import { withRetry } from '../../lib/withRetry'
 import type { ChromeContent, NavItem } from './components/SiteChrome'
 import { SiteChrome } from './components/SiteChrome'
+import { SiteJsonLd } from './components/SiteJsonLd'
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -16,7 +18,11 @@ export const metadata: Metadata = {
     template: `%s — ${SITE_NAME}`,
   },
   description: SITE_DESC,
-  alternates: { canonical: '/' },
+  alternates: {
+    canonical: '/',
+    // Чтобы агрегаторы и краулеры находили ленту без угадывания адреса.
+    types: { 'application/rss+xml': `${SITE_URL}/rss.xml` },
+  },
   openGraph: {
     title: SITE_NAME,
     description: SITE_DESC,
@@ -53,11 +59,15 @@ async function getChrome(): Promise<ChromeContent> {
 }
 
 export default async function FrontendLayout({ children }: { children: React.ReactNode }) {
-  const chrome = await getChrome()
+  // Статистика Метрики — на сервере: OAuth-токен в браузер не уезжает.
+  const [chrome, stats] = await Promise.all([getChrome(), getMetrikaStats()])
   return (
     <html lang="ru">
       <body>
-        <SiteChrome chrome={chrome}>{children}</SiteChrome>
+        <SiteJsonLd />
+        <SiteChrome chrome={chrome} stats={stats}>
+          {children}
+        </SiteChrome>
       </body>
     </html>
   )
