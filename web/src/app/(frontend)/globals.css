@@ -158,6 +158,10 @@ img {
 .site-footer__grid { display: grid; grid-template-columns: 1.5fr repeat(3, 1fr); gap: 3rem; }
 .site-footer__brand { color: #fff; font: 700 1.7rem Georgia, serif; }
 .site-footer__bottom { border-top: 1px solid rgba(255,255,255,.16); margin-top: 2rem; padding-top: 1rem; display: flex; justify-content: space-between; gap: 1rem; font-size: .78rem; }
+/* Информер посещаемости (Яндекс.Метрика, серверный запрос). */
+.site-footer__stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem 1.25rem; margin-top: 1.75rem; font-size: .78rem; color: rgba(255,255,255,.82); }
+.site-footer__stats-label { font-weight: 800; text-transform: uppercase; letter-spacing: .08em; font-size: .68rem; color: #fff; }
+
 /* Ссылка на автора идёт внутри строки, а `.site-footer a` выше — block. */
 .site-footer__author a { display: inline; margin-top: 0; font-size: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .site-footer__author a:hover { color: var(--color-gold); }

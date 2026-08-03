@@ -97,12 +97,25 @@ export async function PostView({ slug }: { slug: string }) {
     '@context': 'https://schema.org',
     '@type': 'NewsArticle',
     headline: post.title || undefined,
+    // Аннотация: то, что модель процитирует, если возьмёт материал в ответ.
+    description: extractText(post.content)?.slice(0, 300) || undefined,
     datePublished: post.date || post.publishedAt || undefined,
     dateModified: post.updatedAt || undefined,
     image: cover?.url ? [`${SITE_URL}${cover.url}`] : undefined,
     articleSection: section?.title || undefined,
+    inLanguage: 'ru-RU',
+    isAccessibleForFree: true,
+    // Кто отвечает за материал — отдельно от того, кто его издал.
+    author: { '@type': 'Organization', name: SITE_NAME, url: SITE_URL },
+    publisher: { '@type': 'NewsMediaOrganization', name: SITE_NAME, url: SITE_URL },
     mainEntityOfPage: `${SITE_URL}/news/${encodeURIComponent(post.slug ?? '')}`,
-    publisher: { '@type': 'Organization', name: SITE_NAME, url: SITE_URL },
+    // Атрибуция первоисточника машиночитаемо, а не только текстом на странице.
+    ...(sourceUrl ? { isBasedOn: sourceUrl } : {}),
+    // Привязка к месту: запрос «что нового в Малмыже» должен находить именно нас.
+    contentLocation: {
+      '@type': 'Place',
+      name: 'Малмыж, Малмыжский район, Кировская область, Россия',
+    },
   }
 
   return (
