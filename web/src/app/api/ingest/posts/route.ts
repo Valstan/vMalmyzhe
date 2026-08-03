@@ -1,7 +1,12 @@
-import { timingSafeEqual } from 'crypto'
 import { getPayload } from 'payload'
 import { NextResponse } from 'next/server'
 import config from '../../../../payload.config'
+import {
+  buildPostData,
+  normalizeVideos,
+  secretMatches,
+  type IncomingVideo,
+} from '../../../../lib/ingest'
 
 // Ingest-эндпойнт контент-конвейера (M0, news-portal-concept §3).
 // Сарафан (шлюз #062) присылает пост из ВК «Малмыж-Инфо» POST'ом; сайт в ВК
@@ -44,116 +49,22 @@ import config from '../../../../payload.config'
 // published не трогается. Рубрика при повторе не перезаписывается — она
 // принадлежит редактору; пустая дозаполняется (#095).
 
+type IncomingImage = string | { url: string; alt?: string }
+
 const MAX_IMAGES = 10
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024
 const FETCH_TIMEOUT_MS = 20_000
 
-// Constant-time сравнение секрета из заголовка с ожидаемым.
-const matches = (given: string, expected: string | undefined): boolean => {
-  if (!expected) return false
-  const a = Buffer.from(given)
-  const b = Buffer.from(expected)
-  return a.length === b.length && timingSafeEqual(a, b)
-}
-
 // Право публиковать — отдельный секрет, не тот, которым авторизуется доставка.
 const mayPublish = (request: Request): boolean =>
-  matches(request.headers.get('x-publish-key') ?? '', process.env.INGEST_PUBLISH_KEY)
+  secretMatches(request.headers.get('x-publish-key') ?? '', process.env.INGEST_PUBLISH_KEY)
 
 const isAuthorized = (request: Request): boolean => {
-  const key = process.env.GATEWAY_KEY_VMALMYZHE
-  if (!key) return false
   const given =
     request.headers.get('x-gateway-key') ??
     request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ??
     ''
-  const a = Buffer.from(given)
-  const b = Buffer.from(key)
-  return a.length === b.length && timingSafeEqual(a, b)
-}
-
-// Узел lexical в том виде, в каком его ждёт сгенерированный тип поля richText.
-type LexNode = { [k: string]: unknown; type: string; version: number }
-
-const textNode = (text: string): LexNode => ({
-  type: 'text',
-  detail: 0,
-  format: 0,
-  mode: 'normal',
-  style: '',
-  text,
-  version: 1,
-})
-
-const paragraph = (children: LexNode[]): LexNode => ({
-  type: 'paragraph',
-  direction: null,
-  format: '' as const,
-  indent: 0,
-  version: 1,
-  children,
-})
-
-// Ссылка на плеер ВК: узел `link` — RichText.tsx его рендерит как <a>.
-const videoParagraph = (url: string, title?: string): LexNode =>
-  paragraph([
-    textNode('🎬 Видео: '),
-    {
-      type: 'link',
-      direction: null,
-      format: '' as const,
-      indent: 0,
-      version: 3,
-      fields: { url, newTab: true, linkType: 'custom' },
-      children: [textNode(title?.trim() || 'смотреть во ВКонтакте')],
-    },
-  ])
-
-// Плейн-текст + видео → минимальный lexical richText (абзац на непустую строку,
-// ссылки на видео — в конец, в том же порядке, в каком пришли из своего поста).
-const buildContent = (text: string, videos: { url: string; title?: string }[]) => {
-  const children: LexNode[] = text
-    .split(/\r?\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => paragraph([textNode(line)]))
-
-  for (const video of videos) children.push(videoParagraph(video.url, video.title))
-
-  return {
-    root: {
-      type: 'root',
-      direction: null,
-      format: '' as const,
-      indent: 0,
-      version: 1,
-      children,
-    },
-  }
-}
-
-type IncomingImage = string | { url: string; alt?: string }
-type IncomingVideo = string | { url: string; title?: string }
-
-const MAX_VIDEOS = 5
-
-// Видео приходят ссылками на плеер ВК — нормализуем и отбрасываем мусор.
-const normalizeVideos = (raw: unknown, warnings: string[]): { url: string; title?: string }[] => {
-  if (!Array.isArray(raw)) return []
-  const videos: { url: string; title?: string }[] = []
-  for (const [index, item] of (raw as IncomingVideo[]).entries()) {
-    if (videos.length >= MAX_VIDEOS) {
-      warnings.push(`videos truncated to ${MAX_VIDEOS}`)
-      break
-    }
-    const url = typeof item === 'string' ? item : item?.url
-    if (!url || !/^https?:\/\//i.test(url)) {
-      warnings.push(`video ${index}: invalid url`)
-      continue
-    }
-    videos.push({ url, title: typeof item === 'object' ? item?.title : undefined })
-  }
-  return videos
+  return secretMatches(given, process.env.GATEWAY_KEY_VMALMYZHE)
 }
 
 const extFromMime = (mime: string): string =>
@@ -272,21 +183,18 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
   }
 
-  const data = {
-    // Одного `draft: false` мало: при включённых versions.drafts Payload берёт
-    // состояние из data._status, и без него документ остаётся черновиком.
-    ...(publish ? { _status: 'published' as const } : {}),
+  const data = buildPostData({
     title,
-    date: body.date || undefined,
-    // Дата публикации = дата оригинала, если её прислали: иначе populatePublishedAt
-    // проставит «сегодня», и трёхдневная новость выглядела бы свежей.
-    publishedAt: body.publishedAt || body.date || undefined,
-    section: sectionId,
-    content: text || videos.length ? buildContent(text, videos) : undefined,
-    cover: mediaIds[0],
-    gallery: mediaIds.length ? mediaIds : undefined,
-    source: { vkPostId, sourceUrl },
-  }
+    text,
+    vkPostId,
+    sourceUrl,
+    publish,
+    videos,
+    mediaIds,
+    date: body.date,
+    publishedAt: body.publishedAt,
+    sectionId,
+  })
 
   if (existingPost) {
     // Draft уже есть — обновляем содержимое (правки поста в ВК доезжают),
