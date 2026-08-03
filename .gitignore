@@ -45,6 +45,9 @@ dist
 # pnpm
 .pnpm-store
 
-# Claude Code — per-machine local overrides (committed: .claude/settings.json)
+# AI-агенты (ADR-0011): канон — AGENTS.md, адаптеры CLAUDE.md/GEMINI.md и общие
+# .claude/commands + .claude/settings.json коммитим. Локальное и кэши — нет.
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+.codex/
+.gemini/
