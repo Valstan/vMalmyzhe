@@ -11,6 +11,8 @@ name: CI
 #   test      — вернули баг «publish не проставляет _status» → exit 1
 #   typecheck — присвоили строку в number                    → exit 2
 #   lint      — нарушили rules-of-hooks                      → exit 1
+#   lint      — нарочно внесли `any` после поднятия правил в error → exit 1
+#   deadcode  — нарочно внесли unused-export (__probe)       → exit 1
 #
 # build здесь намеренно НЕ гоняем: Payload лезет в БД на пререндере, поднимать
 # Postgres в CI ради этого дороже пользы — сборка проверяется в deploy-prod.yml.
@@ -54,3 +56,10 @@ jobs:
       - name: Tests
         working-directory: web
         run: pnpm test
+
+      # Судьба knip решена (ревизия #104): включаем в CI как гейт «мёртвый код»,
+      # а не держим скрипт который никто не вызывает. Красный прогон показан:
+      # нарочный unused-export падает с exit 1, откачено.
+      - name: Dead code
+        working-directory: web
+        run: pnpm deadcode
