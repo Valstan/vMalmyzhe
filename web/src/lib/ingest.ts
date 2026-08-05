@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'crypto'
+import { randomBytes, timingSafeEqual } from 'crypto'
 
 // Чистая логика ingest-конвейера, вынесенная из route.ts, чтобы её можно было
 // проверить тестами без БД и HTTP. Причина конкретная: 2026-08-03 два бага
@@ -47,13 +47,17 @@ export const videoParagraph = (url: string, title?: string): LexNode =>
     },
   ])
 
-// Картинка внутри текста: узел `upload` (Lexical block) — RichText рендерит
-// его как <img>, клик открывает галерею поста. Ссылается на media-документ,
-// куда ingest переложил файл из ВК.
+// Картинка внутри текста: узел `upload` (Lexical block, version 3 — схема
+// Payload 3) — RichText рендерит его как <img>, клик открывает галерею поста.
+// Ссылается на media-документ, куда ingest переложил файл из ВК.
 export const imageNode = (mediaId: number): LexNode => ({
   type: 'upload',
-  version: 2,
-  fields: { relationTo: 'media' as const, value: mediaId },
+  version: 3,
+  format: '' as const,
+  id: randomBytes(12).toString('hex'),
+  fields: {},
+  relationTo: 'media' as const,
+  value: mediaId,
 })
 
 // Текст + видео + картинки → минимальный lexical richText.

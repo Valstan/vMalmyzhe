@@ -120,10 +120,8 @@ describe('картинки встраиваются в текст, а не ко�
     const nodes = content.root.children
     // абзац, upload(12), абзац, upload(13) — обложка 11 остаётся только cover
     expect(nodes.map((n) => n.type)).toEqual(['paragraph', 'upload', 'paragraph', 'upload'])
-    const uploads = nodes.filter((n) => n.type === 'upload') as unknown as {
-      fields: { value: number }
-    }[]
-    expect(uploads.map((u) => u.fields.value)).toEqual([12, 13])
+    const uploads = nodes.filter((n) => n.type === 'upload') as unknown as { value: number }[]
+    expect(uploads.map((u) => u.value)).toEqual([12, 13])
   })
 
   it('картинки распределяются между абзацами равномерно', () => {
@@ -145,8 +143,10 @@ describe('картинки встраиваются в текст, а не ко�
 
   it('медиа из чужого поста в текст не попадают: вставляются только свои', () => {
     const data = buildPostData({ ...base, publish: true, mediaIds: [11, 12] })
-    const content = data.content as { root: { children: { type?: string; fields?: { value?: number } }[] } }
+    const content = data.content as {
+      root: { children: { type?: string; value?: number }[] }
+    }
     const uploads = content.root.children.filter((n) => n.type === 'upload')
-    expect(uploads.map((u) => u.fields?.value)).toEqual([12])
+    expect(uploads.map((u) => u.value)).toEqual([12])
   })
 })
