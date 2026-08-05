@@ -9,6 +9,7 @@ import { notFound } from 'next/navigation'
 import { SITE_NAME, SITE_URL } from '../../../lib/site'
 import { withRetry } from '../../../lib/withRetry'
 import { RichText } from '../../../lib/RichText'
+import { PostGallery } from '../components/PostGallery'
 import { formatPostDate } from '../../../lib/format'
 import type { MediaDoc, SectionDoc } from '../../../lib/portal'
 
@@ -53,6 +54,19 @@ function extractText(content: unknown, max = 200): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
+// Есть ли картинки, встроенные в текст (upload-узлы)? Новые посты (с 05.08)
+// ingest кладёт фото внутрь текста; старые — только в gallery скопом в конце.
+function hasInlineMedia(content: unknown): boolean {
+  const walk = (node: unknown): boolean => {
+    if (!node || typeof node !== 'object') return false
+    const n = node as { type?: unknown; children?: unknown[] }
+    if (n.type === 'upload') return true
+    if (Array.isArray(n.children)) return n.children.some(walk)
+    return false
+  }
+  return walk((content as { root?: unknown } | null | undefined)?.root)
+}
+
 export async function postMeta(slug: string): Promise<Metadata> {
   try {
     const post = await getPost(decodeURIComponent(slug))
@@ -85,10 +99,20 @@ export async function PostView({ slug }: { slug: string }) {
   const cover = typeof post.cover === 'object' && post.cover ? (post.cover as MediaDoc) : null
   const section =
     typeof post.section === 'object' && post.section ? (post.section as SectionDoc) : null
-  // Галерея без дубля обложки: первое фото поста и есть cover (так кладёт ingest).
-  const gallery = (post.gallery ?? [])
-    .filter((item): item is MediaDoc => typeof item === 'object' && item !== null)
-    .filter((item) => item.url && item.url !== cover?.url)
+  const allMedia = (post.gallery ?? []).filter(
+    (item): item is MediaDoc => typeof item === 'object' && item !== null,
+  )
+  // mediaMap: id медиа → url — для картинок внутри текста (RichText не умеет
+  // резолвить upload-узлы сам).
+  const mediaMap: Record<string, string | undefined> = {}
+  for (const m of allMedia) {
+    if (m.id != null && m.url) mediaMap[String(m.id)] = m.url
+  }
+  if (cover?.id != null && cover.url) mediaMap[String(cover.id)] = cover.url
+  // Галерея-скоп в конце: только для старых постов, где фото не встроены в текст.
+  const tailGallery = hasInlineMedia(post.content)
+    ? []
+    : allMedia.filter((item) => item.url && item.url !== cover?.url)
   const sourceUrl = post.source?.sourceUrl || null
 
   // JSON-LD NewsArticle (GEO/SEO #051): помогает поисковикам и LLM-агрегаторам
@@ -145,13 +169,22 @@ export async function PostView({ slug }: { slug: string }) {
           alt={cover.alt || post.title || ''}
           width={cover.width || 1200}
           height={cover.height || 675}
+          data-post-media
         />
       ) : null}
-      <RichText data={post.content} />
-      {gallery.length > 0 ? (
+      <div className="post-content">
+        <RichText data={post.content} mediaMap={mediaMap} />
+      </div>
+      {tailGallery.length > 0 ? (
         <div className="post-gallery">
-          {gallery.map((item, i) => (
-            <img key={item.url ?? i} src={item.url!} alt={item.alt || ''} loading="lazy" />
+          {tailGallery.map((item, i) => (
+            <img
+              key={item.url ?? i}
+              src={item.url!}
+              alt={item.alt || ''}
+              loading="lazy"
+              data-post-media
+            />
           ))}
         </div>
       ) : null}
@@ -163,6 +196,7 @@ export async function PostView({ slug }: { slug: string }) {
           </a>
         </p>
       ) : null}
+      <PostGallery />
     </article>
   )
 }

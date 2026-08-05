@@ -2,9 +2,10 @@ import React from 'react'
 
 // Минимальный серверный рендер Lexical-richText → React. Поддерживает абзацы,
 // заголовки (h2/h3), жирный/курсив/подчёркивание/зачёркивание, ссылки, списки,
-// горизонтальную черту и переносы строк. Сложные узлы (upload/block/relationship
-// и т.п.) рендерятся как пустые — для каркаса этого достаточно; полноценный
-// рендер можно добавить при наполнении сайта.
+// горизонтальную черту, переносы строк, картинки внутри текста (узел `upload`,
+// mediaMap — id → url) и видео ВК (ссылка на vk.com/video… рендерится
+// iframe-плеером vk.com/video_ext.php). Сложные узлы (block/relationship и
+// т.п.) рендерятся как пустые — для новостного конвейера этого достаточно.
 
 const FORMAT_BOLD = 1
 const FORMAT_ITALIC = 2
@@ -13,6 +14,16 @@ const FORMAT_UNDERLINE = 8
 
 type LexNode = { type?: string; [k: string]: unknown }
 type LexRoot = { root?: { children?: LexNode[] } }
+
+// Встраиваемый плеер ВК: vk.com/video{oid}_{id} → video_ext.php (публичные
+// видео проигрываются без hash). Если отдающий приложил player-URL
+// (vk.com/video_ext.php?oid=…&id=…&hash=…) — используем как есть.
+export function vkEmbedUrl(url: string): string | null {
+  if (/^https?:\/\/vk\.com\/video_ext\.php/i.test(url)) return url
+  const m = /vk\.com\/video(-?\d+)_(\d+)/i.exec(url)
+  if (!m) return null
+  return `https://vk.com/video_ext.php?oid=${m[1]}&id=${m[2]}`
+}
 
 function renderInline(children: unknown, keyPrefix: string): React.ReactNode[] {
   if (!Array.isArray(children)) return []
@@ -30,9 +41,23 @@ function renderInline(children: unknown, keyPrefix: string): React.ReactNode[] {
     }
     if (type === 'linebreak') return <br key={key} />
     if (type === 'link' || type === 'autolink') {
-      const fields = (node.fields as { url?: string } | undefined) ?? {}
+      const fields = (node.fields as { url?: string; newTab?: boolean } | undefined) ?? {}
+      const href = String(fields.url ?? '#')
+      const embed = vkEmbedUrl(href)
+      if (embed) {
+        return (
+          <iframe
+            key={key}
+            className="vk-video"
+            src={embed}
+            title={String(node.title ?? 'Видео ВКонтакте')}
+            allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+            allowFullScreen
+          />
+        )
+      }
       return (
-        <a key={key} href={String(fields.url ?? '#')}>
+        <a key={key} href={href} target={fields.newTab ? '_blank' : undefined} rel={fields.newTab ? 'noopener' : undefined}>
           {renderInline(node.children, key)}
         </a>
       )
@@ -41,7 +66,13 @@ function renderInline(children: unknown, keyPrefix: string): React.ReactNode[] {
   })
 }
 
-export function RichText({ data }: { data: unknown }) {
+export function RichText({
+  data,
+  mediaMap,
+}: {
+  data: unknown
+  mediaMap?: Record<string, string | undefined>
+}) {
   const root = (data as LexRoot)?.root
   if (!root || !Array.isArray(root.children)) return null
   return (
@@ -65,6 +96,25 @@ export function RichText({ data }: { data: unknown }) {
         if (type === 'paragraph') {
           const inner = renderInline(node.children, key)
           return <p key={key}>{inner}</p>
+        }
+        if (type === 'upload') {
+          const fields = (node.fields as
+            | { relationTo?: string; value?: string | number | null }
+            | undefined)
+          if (fields?.relationTo !== 'media' || fields.value == null) return null
+          const url = mediaMap?.[String(fields.value)]
+          if (!url) return null
+          // Картинка внутри текста: клик открывает галерею поста (PostGallery).
+          return (
+            <img
+              key={key}
+              className="post-inline-img"
+              src={url}
+              alt=""
+              loading="lazy"
+              data-post-media
+            />
+          )
         }
         return null
       })}

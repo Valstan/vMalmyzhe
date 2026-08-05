@@ -17,6 +17,7 @@ export type SectionDoc = {
 }
 
 export type MediaDoc = {
+  id?: string | number
   url?: string | null
   alt?: string | null
   width?: number | null

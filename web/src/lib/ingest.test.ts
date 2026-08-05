@@ -113,3 +113,40 @@ describe('медиа не перетекают между новостями', (
     expect(data.gallery).toBeUndefined()
   })
 })
+
+describe('картинки встраиваются в текст, а не копятся в конце (заказ владельца 05.08)', () => {
+  it('первое медиа — обложка, в текст не дублируется; остальные — upload-узлами', () => {
+    const content = buildContent('Раз.\nДва.', [], [11, 12, 13])
+    const nodes = content.root.children
+    // абзац, upload(12), абзац, upload(13) — обложка 11 остаётся только cover
+    expect(nodes.map((n) => n.type)).toEqual(['paragraph', 'upload', 'paragraph', 'upload'])
+    const uploads = nodes.filter((n) => n.type === 'upload') as unknown as {
+      fields: { value: number }
+    }[]
+    expect(uploads.map((u) => u.fields.value)).toEqual([12, 13])
+  })
+
+  it('картинки распределяются между абзацами равномерно', () => {
+    const content = buildContent('Один.\nДва.\nТри.', [], [11, 12, 13])
+    const nodes = content.root.children
+    expect(nodes.map((n) => n.type)).toEqual([
+      'paragraph',
+      'upload',
+      'paragraph',
+      'upload',
+      'paragraph',
+    ])
+  })
+
+  it('одно фото (только обложка) — upload-узлов в тексте нет', () => {
+    const content = buildContent('Текст.', [], [11])
+    expect(content.root.children.map((n) => n.type)).toEqual(['paragraph'])
+  })
+
+  it('медиа из чужого поста в текст не попадают: вставляются только свои', () => {
+    const data = buildPostData({ ...base, publish: true, mediaIds: [11, 12] })
+    const content = data.content as { root: { children: { type?: string; fields?: { value?: number } }[] } }
+    const uploads = content.root.children.filter((n) => n.type === 'upload')
+    expect(uploads.map((u) => u.fields?.value)).toEqual([12])
+  })
+})
