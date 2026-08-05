@@ -10,9 +10,9 @@ import { randomBytes, timingSafeEqual } from 'crypto'
 
 export type LexNode = { [k: string]: unknown; type: string; version: number }
 
-export const MAX_VIDEOS = 5
+const MAX_VIDEOS = 5
 
-export const textNode = (text: string): LexNode => ({
+const textNode = (text: string): LexNode => ({
   type: 'text',
   detail: 0,
   format: 0,
@@ -22,7 +22,7 @@ export const textNode = (text: string): LexNode => ({
   version: 1,
 })
 
-export const paragraph = (children: LexNode[]): LexNode => ({
+const paragraph = (children: LexNode[]): LexNode => ({
   type: 'paragraph',
   direction: null,
   format: '' as const,
@@ -33,7 +33,7 @@ export const paragraph = (children: LexNode[]): LexNode => ({
 
 // Ссылка на плеер ВК: узел `link` — RichText рендерит его как iframe-плеер,
 // если URL распознаётся как видео ВКонтакте.
-export const videoParagraph = (url: string, title?: string): LexNode =>
+const videoParagraph = (url: string, title?: string): LexNode =>
   paragraph([
     textNode('🎬 Видео: '),
     {
@@ -50,7 +50,7 @@ export const videoParagraph = (url: string, title?: string): LexNode =>
 // Картинка внутри текста: узел `upload` (Lexical block, version 3 — схема
 // Payload 3) — RichText рендерит его как <img>, клик открывает галерею поста.
 // Ссылается на media-документ, куда ingest переложил файл из ВК.
-export const imageNode = (mediaId: number): LexNode => ({
+const imageNode = (mediaId: number): LexNode => ({
   type: 'upload',
   version: 3,
   format: '' as const,

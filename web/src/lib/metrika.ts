@@ -12,7 +12,7 @@
 
 const API = 'https://api-metrika.yandex.net/stat/v1/data'
 
-export type DayStats = { users: number; pageviews: number }
+type DayStats = { users: number; pageviews: number }
 export type MetrikaStats = { today: DayStats; yesterday: DayStats } | null
 
 export const METRIKA_ID = process.env.NEXT_PUBLIC_YANDEX_METRIKA_ID || ''
@@ -66,3 +66,4 @@ export async function getMetrikaStats(): Promise<MetrikaStats> {
     return null
   }
 }
+

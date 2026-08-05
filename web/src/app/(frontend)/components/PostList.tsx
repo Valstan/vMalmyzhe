@@ -10,7 +10,7 @@ import type { PostListItem, SectionDoc, MediaDoc } from '../../../lib/portal'
 
 const FEED_BANNER_EVERY = 5
 
-export function PostCard({ post, heading = 'h3' }: { post: PostListItem; heading?: 'h2' | 'h3' }) {
+function PostCard({ post, heading = 'h3' }: { post: PostListItem; heading?: 'h2' | 'h3' }) {
   const section = typeof post.section === 'object' && post.section ? (post.section as SectionDoc) : null
   const cover = typeof post.cover === 'object' && post.cover ? (post.cover as MediaDoc) : null
   const thumb = cover?.sizes?.card?.url || cover?.url || null
