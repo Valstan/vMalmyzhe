@@ -103,7 +103,9 @@ for (const item of selection) {
         alt: item.title,
       })),
       videos: pick(videos, item.videos, 'видео', post.id).map((v) => ({
-        url: videoUrl(v.video),
+        // player (video_ext.php с hash) есть не всегда; без него RichText
+        // соберёт embed-URL сам из vk.com/video{oid}_{id}.
+        url: v.video.player || videoUrl(v.video),
         title: v.video.title,
       })),
     }

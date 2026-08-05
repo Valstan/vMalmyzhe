@@ -388,6 +388,117 @@ img {
   border-radius: 6px;
   width: 100%;
   height: auto;
+  cursor: zoom-in;
+}
+
+/* Картинка внутри текста поста (заказ владельца 05.08) */
+.post-content img.post-inline-img,
+.post-content .post-inline-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 1rem 0;
+  cursor: zoom-in;
+}
+
+.post-content img.post-inline-img:hover,
+.post-gallery img:hover {
+  box-shadow: var(--shadow);
+}
+
+/* Встроенный плеер ВК (iframe в тексте поста) */
+.vk-video {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 16 / 9;
+  height: auto;
+  border: 0;
+  border-radius: 6px;
+  margin: 1rem auto;
+  background: #000;
+}
+
+/* Лайтбокс-галерея поста: оверлей, навигация, подпись */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 16, 14, 0.92);
+  padding: 2rem;
+}
+
+.lightbox__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: min(92vw, 1100px);
+  margin: 0;
+}
+
+.lightbox__stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+
+.lightbox__stage figcaption {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.lightbox__close {
+  position: absolute;
+  top: 0.75rem;
+  right: 1rem;
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 1.9rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.35rem 0.6rem;
+}
+
+.lightbox__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  color: #fff;
+  font-size: 2.2rem;
+  line-height: 1;
+  width: 3rem;
+  height: 3rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.lightbox__prev { left: 1rem; }
+.lightbox__next { right: 1rem; }
+
+.lightbox__nav:hover,
+.lightbox__close:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+@media (max-width: 540px) {
+  .lightbox { padding: 1rem; }
+  .lightbox__stage img { max-height: 74vh; }
+  .lightbox__nav { width: 2.4rem; height: 2.4rem; font-size: 1.7rem; }
+  .lightbox__prev { left: 0.4rem; }
+  .lightbox__next { right: 0.4rem; }
 }
 
 .post-source {

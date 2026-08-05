@@ -31,7 +31,8 @@ export const paragraph = (children: LexNode[]): LexNode => ({
   children,
 })
 
-// Ссылка на плеер ВК: узел `link` — RichText.tsx его рендерит как <a>.
+// Ссылка на плеер ВК: узел `link` — RichText рендерит его как iframe-плеер,
+// если URL распознаётся как видео ВКонтакте.
 export const videoParagraph = (url: string, title?: string): LexNode =>
   paragraph([
     textNode('🎬 Видео: '),
@@ -46,14 +47,53 @@ export const videoParagraph = (url: string, title?: string): LexNode =>
     },
   ])
 
-// Плейн-текст + видео → минимальный lexical richText (абзац на непустую строку,
-// ссылки на видео — в конец, в том же порядке, в каком пришли из своего поста).
-export const buildContent = (text: string, videos: { url: string; title?: string }[]) => {
-  const children: LexNode[] = text
+// Картинка внутри текста: узел `upload` (Lexical block) — RichText рендерит
+// его как <img>, клик открывает галерею поста. Ссылается на media-документ,
+// куда ingest переложил файл из ВК.
+export const imageNode = (mediaId: number): LexNode => ({
+  type: 'upload',
+  version: 2,
+  fields: { relationTo: 'media' as const, value: mediaId },
+})
+
+// Текст + видео + картинки → минимальный lexical richText.
+//
+// Картинки НЕ копятся в конце статьи, а встраиваются между абзацами равномерно
+// (заказ владельца 05.08). Первое медиа (`mediaIds[0]`) — это обложка, она уже
+// выводится шапкой поста, в текст не дублируется. Видео — ссылками на плеер
+// ВК в конец, в том же порядке, в каком пришли из своего поста.
+export const buildContent = (
+  text: string,
+  videos: { url: string; title?: string }[],
+  mediaIds: number[] = [],
+) => {
+  const paragraphs: LexNode[] = text
     .split(/\r?\n+/)
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => paragraph([textNode(line)]))
+
+  const inlineMedia = mediaIds.slice(1)
+  const imagesByPos = new Map<number, LexNode[]>()
+  if (paragraphs.length && inlineMedia.length) {
+    inlineMedia.forEach((id, j) => {
+      // Позиция (индекс абзаца, ПОСЛЕ которого вставляем) — равномерно.
+      const pos = Math.min(
+        Math.max(Math.ceil(((j + 1) * paragraphs.length) / (inlineMedia.length + 1)) - 1, 0),
+        paragraphs.length - 1,
+      )
+      const bucket = imagesByPos.get(pos) ?? []
+      bucket.push(imageNode(id))
+      imagesByPos.set(pos, bucket)
+    })
+  }
+
+  const children: LexNode[] = []
+  paragraphs.forEach((p, i) => {
+    children.push(p)
+    const images = imagesByPos.get(i)
+    if (images) children.push(...images)
+  })
 
   for (const video of videos) children.push(videoParagraph(video.url, video.title))
 
@@ -128,7 +168,10 @@ export const buildPostData = (input: PostDataInput) => ({
   // выглядела бы свежей.
   publishedAt: input.publishedAt || input.date || undefined,
   section: input.sectionId,
-  content: input.text || input.videos.length ? buildContent(input.text, input.videos) : undefined,
+  content:
+    input.text || input.videos.length || input.mediaIds.length
+      ? buildContent(input.text, input.videos, input.mediaIds)
+      : undefined,
   cover: input.mediaIds[0],
   gallery: input.mediaIds.length ? input.mediaIds : undefined,
   source: { vkPostId: input.vkPostId, sourceUrl: input.sourceUrl },
