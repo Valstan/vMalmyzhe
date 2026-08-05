@@ -66,6 +66,30 @@ function renderInline(children: unknown, keyPrefix: string): React.ReactNode[] {
   })
 }
 
+// URL картинки из upload-узла richText. Payload 3: relationTo/value на уровне
+// узла (version 3); version 2 держал их внутри fields. При population value —
+// объект медиа (id/url), в сырой БД — id. Возвращает null, если это не media.
+export function resolveUploadUrl(
+  node: LexNode,
+  mediaMap?: Record<string, string | undefined>,
+): string | null {
+  let rel: unknown = node.relationTo
+  let value: unknown = node.value
+  const legacyFields = (node.fields as
+    | { relationTo?: string; value?: string | number | null }
+    | undefined)
+  if (rel == null && legacyFields?.relationTo === 'media') {
+    rel = legacyFields.relationTo
+    value = legacyFields.value
+  }
+  if (rel !== 'media' || value == null) return null
+  if (typeof value === 'object') {
+    const mediaObj = value as { id?: unknown; url?: string }
+    return mediaMap?.[String(mediaObj.id)] ?? mediaObj.url ?? null
+  }
+  return mediaMap?.[String(value)] ?? null
+}
+
 export function RichText({
   data,
   mediaMap,
@@ -98,20 +122,7 @@ export function RichText({
           return <p key={key}>{inner}</p>
         }
         if (type === 'upload') {
-          // Payload 3: relationTo/value лежат на уровне узла (version 3).
-          // version 2 (fields.relationTo/fields.value) оставлен как запасной —
-          // если в старой БД встретится такой формат.
-          let rel: unknown = node.relationTo
-          let value: unknown = node.value
-          const legacyFields = (node.fields as
-            | { relationTo?: string; value?: string | number | null }
-            | undefined)
-          if (rel == null && legacyFields?.relationTo === 'media') {
-            rel = legacyFields.relationTo
-            value = legacyFields.value
-          }
-          if (rel !== 'media' || value == null) return null
-          const url = mediaMap?.[String(value)]
+          const url = resolveUploadUrl(node, mediaMap)
           if (!url) return null
           // Картинка внутри текста: клик открывает галерею поста (PostGallery).
           return (
