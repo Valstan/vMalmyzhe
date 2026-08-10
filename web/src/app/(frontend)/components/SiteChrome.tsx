@@ -1,26 +1,10 @@
 import Link from 'next/link'
 import React from 'react'
 
-import type { MetrikaStats } from '../../../lib/metrika'
 import { METRIKA_ID } from '../../../lib/metrika'
 import { AUTHOR_CREDIT, AUTHOR_URL, SERVICES_CATALOG_URL, SITE_NAME } from '../../../lib/site'
 import { MetrikaInformer } from './MetrikaInformer'
 import { YandexMetrika } from './YandexMetrika'
-
-// «5 посетителей» / «1 посетитель» / «22 посетителя» — без этого счётчик в
-// подвале читается как машинный вывод.
-const plural = (n: number, one: string, few: string, many: string) => {
-  const mod100 = n % 100
-  const mod10 = n % 10
-  if (mod100 >= 11 && mod100 <= 14) return many
-  if (mod10 === 1) return one
-  if (mod10 >= 2 && mod10 <= 4) return few
-  return many
-}
-
-const describe = (label: string, day: { users: number; pageviews: number }) =>
-  `${label}: ${day.users} ${plural(day.users, 'посетитель', 'посетителя', 'посетителей')}, ` +
-  `${day.pageviews} ${plural(day.pageviews, 'просмотр', 'просмотра', 'просмотров')}`
 
 export type NavItem = { label: string; href: string }
 export type ChromeContent = {
@@ -34,11 +18,9 @@ export type ChromeContent = {
 // пустыми в свежем каркасе) — тогда падаем на код-фолбэк.
 export function SiteChrome({
   chrome,
-  stats,
   children,
 }: {
   chrome: ChromeContent
-  stats?: MetrikaStats
   children: React.ReactNode
 }) {
   const brand = chrome?.brand || SITE_NAME
@@ -122,15 +104,9 @@ export function SiteChrome({
             {chrome?.contacts ? <p className="site-footer__contacts">{chrome.contacts}</p> : <p>Предложить новость или событие</p>}
           </div>
         </div>
-        {stats || METRIKA_ID ? (
+        {METRIKA_ID ? (
           <div className="container site-footer__stats">
             <span className="site-footer__stats-label">Посещаемость</span>
-            {stats ? (
-              <>
-                <span>{describe('Сегодня', stats.today)}</span>
-                <span>{describe('Вчера', stats.yesterday)}</span>
-              </>
-            ) : null}
             <MetrikaInformer />
             {/* Уведомление об обработке данных: аналитика — это обработка данных
                 посетителя, и о ней надо сказать там же, где стоит счётчик. */}
