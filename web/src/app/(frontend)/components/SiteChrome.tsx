@@ -2,7 +2,9 @@ import Link from 'next/link'
 import React from 'react'
 
 import type { MetrikaStats } from '../../../lib/metrika'
+import { METRIKA_ID } from '../../../lib/metrika'
 import { AUTHOR_CREDIT, AUTHOR_URL, SERVICES_CATALOG_URL, SITE_NAME } from '../../../lib/site'
+import { MetrikaInformer } from './MetrikaInformer'
 import { YandexMetrika } from './YandexMetrika'
 
 // «5 посетителей» / «1 посетитель» / «22 посетителя» — без этого счётчик в
@@ -120,11 +122,28 @@ export function SiteChrome({
             {chrome?.contacts ? <p className="site-footer__contacts">{chrome.contacts}</p> : <p>Предложить новость или событие</p>}
           </div>
         </div>
-        {stats ? (
+        {stats || METRIKA_ID ? (
           <div className="container site-footer__stats">
             <span className="site-footer__stats-label">Посещаемость</span>
-            <span>{describe('Сегодня', stats.today)}</span>
-            <span>{describe('Вчера', stats.yesterday)}</span>
+            {stats ? (
+              <>
+                <span>{describe('Сегодня', stats.today)}</span>
+                <span>{describe('Вчера', stats.yesterday)}</span>
+              </>
+            ) : null}
+            <MetrikaInformer />
+            {/* Уведомление об обработке данных: аналитика — это обработка данных
+                посетителя, и о ней надо сказать там же, где стоит счётчик. */}
+            <span className="site-footer__privacy">
+              Сайт использует Яндекс.Метрику —{' '}
+              <a
+                href="https://yandex.ru/legal/confidential/"
+                rel="nofollow noopener"
+                target="_blank"
+              >
+                политика конфиденциальности
+              </a>
+            </span>
           </div>
         ) : null}
         <div className="container site-footer__bottom">

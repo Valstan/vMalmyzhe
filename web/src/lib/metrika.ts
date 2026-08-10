@@ -15,7 +15,17 @@ const API = 'https://api-metrika.yandex.net/stat/v1/data'
 type DayStats = { users: number; pageviews: number }
 export type MetrikaStats = { today: DayStats; yesterday: DayStats } | null
 
-export const METRIKA_ID = process.env.NEXT_PUBLIC_YANDEX_METRIKA_ID || ''
+// Номер счётчика подставляется внутрь инлайнового `<script>` (YandexMetrika.tsx)
+// — та же поверхность, что JSON-LD в G209, только источник не пользовательский,
+// а прод-env. Пропускаем одни цифры: класс закрыт по конструкции, а заодно
+// опечатка в переменной окружения не даёт молча битый счётчик — информер и
+// счётчик просто не рендерятся, как и при пустом значении.
+export function normalizeMetrikaId(raw: string | undefined): string {
+  const value = (raw || '').trim()
+  return /^\d+$/.test(value) ? value : ''
+}
+
+export const METRIKA_ID = normalizeMetrikaId(process.env.NEXT_PUBLIC_YANDEX_METRIKA_ID)
 
 const empty: DayStats = { users: 0, pageviews: 0 }
 

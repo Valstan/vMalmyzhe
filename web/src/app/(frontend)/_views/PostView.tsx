@@ -6,6 +6,7 @@ import config from '@payload-config'
 import { getPayload } from 'payload'
 import { notFound } from 'next/navigation'
 
+import { jsonLdHtml } from '../../../lib/jsonLd'
 import { SITE_NAME, SITE_URL } from '../../../lib/site'
 import { withRetry } from '../../../lib/withRetry'
 import { RichText } from '../../../lib/RichText'
@@ -146,7 +147,7 @@ export async function PostView({ slug }: { slug: string }) {
     <article>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, '\\u003c') }}
+        dangerouslySetInnerHTML={{ __html: jsonLdHtml(jsonLd) }}
       />
       <h1>{post.title}</h1>
       <p className="post-list__meta">
