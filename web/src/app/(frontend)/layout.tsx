@@ -4,7 +4,6 @@ import { getPayload } from 'payload'
 import React from 'react'
 
 import './globals.css'
-import { getMetrikaStats } from '../../lib/metrika'
 import { SITE_DESC, SITE_NAME, SITE_URL } from '../../lib/site'
 import { withRetry } from '../../lib/withRetry'
 import type { ChromeContent, NavItem } from './components/SiteChrome'
@@ -59,15 +58,12 @@ async function getChrome(): Promise<ChromeContent> {
 }
 
 export default async function FrontendLayout({ children }: { children: React.ReactNode }) {
-  // Статистика Метрики — на сервере: OAuth-токен в браузер не уезжает.
-  const [chrome, stats] = await Promise.all([getChrome(), getMetrikaStats()])
+  const chrome = await getChrome()
   return (
     <html lang="ru">
       <body>
         <SiteJsonLd />
-        <SiteChrome chrome={chrome} stats={stats}>
-          {children}
-        </SiteChrome>
+        <SiteChrome chrome={chrome}>{children}</SiteChrome>
       </body>
     </html>
   )
