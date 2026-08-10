@@ -1,5 +1,6 @@
 import React from 'react'
 
+import { jsonLdHtml } from '../../../lib/jsonLd'
 import { SITE_DESC, SITE_NAME, SITE_URL } from '../../../lib/site'
 
 // Разметка издания и сайта — на каждой странице. Нужна, чтобы машина понимала
@@ -46,7 +47,7 @@ export function SiteJsonLd() {
   return (
     <script
       type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(graph).replace(/</g, '\\u003c') }}
+      dangerouslySetInnerHTML={{ __html: jsonLdHtml(graph) }}
     />
   )
 }
