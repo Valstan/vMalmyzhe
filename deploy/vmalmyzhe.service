@@ -14,6 +14,14 @@ User=valstan
 WorkingDirectory=/home/valstan/vmalmyzhe/current
 # Секреты (DATABASE_URI, PAYLOAD_SECRET, PORT, MEDIA_DIR, …) — вне репо (pool #008).
 EnvironmentFile=/etc/vmalmyzhe/vmalmyzhe.env
+# Keep-alive длиннее, чем у любого разумного прокси-пула (G234): при дефолтных
+# 5 с Node закрывает сокет, который прокси считает живым, и не-идемпотентный POST
+# отвечает 502 при пустых логах приложения. Сегодня гонка не воспроизводима —
+# nginx проксирует без `upstream{keepalive}`, пул не держится; это страховка на
+# случай, когда пул появится. `headersTimeout` Next-standalone наружу не отдаёт,
+# он остаётся 60 000 мс и фактически ограничивает idle сверху — то есть пул
+# прокси должен быть короче 60 с.
+Environment=KEEP_ALIVE_TIMEOUT=65000
 ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=3
