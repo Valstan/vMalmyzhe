@@ -162,6 +162,13 @@ img {
 .site-footer__stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem 1.25rem; margin-top: 1.75rem; font-size: .78rem; color: rgba(255,255,255,.82); }
 .site-footer__stats-label { font-weight: 800; text-transform: uppercase; letter-spacing: .08em; font-size: .68rem; color: #fff; }
 
+/* Информер Метрики — картинка 88×31; общее правило `.site-footer a` делает
+   ссылки block, здесь это разорвало бы строку посещаемости. */
+.site-footer__informer { display: inline-flex; margin-top: 0; align-self: center; }
+.site-footer__informer img { display: block; }
+.site-footer__privacy { font-size: .72rem; color: rgba(255,255,255,.62); }
+.site-footer__privacy a { display: inline; margin-top: 0; font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
+
 /* Ссылка на автора идёт внутри строки, а `.site-footer a` выше — block. */
 .site-footer__author a { display: inline; margin-top: 0; font-size: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
 .site-footer__author a:hover { color: var(--color-gold); }
