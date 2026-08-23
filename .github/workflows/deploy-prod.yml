@@ -3,13 +3,15 @@ name: Deploy to production
 # Сборка едет в CI (ubuntu), т.к. прод-VPS (мало RAM) не тянет next build.
 # На сервер по SSH кладём готовый standalone-артефакт и рестартим systemd-сервис.
 #
-# Требуется:
+# Требуется (значения — только в настройках репозитория, не в файлах: репо
+# публичный, D-038 — реквизиты бокса в отслеживаемых файлах не держим):
 #   secrets.SSH_PRIVATE_KEY        — приватная часть деплой-ключа
-#   secrets.DATABASE_URI           — строка подключения к прод-БД (для CI-сборки НЕ нужна — там эфемерная; здесь не используется на сборке, но имя зарезервировано для будущих шагов)
-#   secrets.PAYLOAD_SECRET         — секрет Payload (на рантайме читается из /etc/vmalmyzhe/vmalmyzhe.env)
 #   vars.DEPLOY_SSH_HOST           — хост прод-сервера
 #   vars.DEPLOY_SSH_PORT           — внешний SSH-порт
+#   vars.DEPLOY_SSH_USER           — пользователь деплоя на боксе (его $HOME — корень релизов)
 #   vars.NEXT_PUBLIC_SERVER_URL    — боевой домен (punycode вмалмыже.рф; бейкается в бандл при сборке)
+# Секреты рантайма (DATABASE_URI, PAYLOAD_SECRET, …) в CI не нужны: сборка идёт на
+# эфемерной БД с заглушками, на боксе их читает systemd из prod-env вне репо.
 
 on:
   push:
@@ -121,10 +123,11 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ vars.DEPLOY_SSH_USER }}
         run: |
           set -e
-          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ]; then
-            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT"
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ] || [ -z "$DEPLOY_SSH_USER" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / vars.DEPLOY_SSH_USER"
             exit 1
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -135,7 +138,7 @@ jobs:
           Host vmalmyzhe
             HostName $DEPLOY_SSH_HOST
             Port $DEPLOY_SSH_PORT
-            User valstan
+            User $DEPLOY_SSH_USER
             IdentityFile ~/.ssh/id_ed25519_vmalmyzhe
             IdentitiesOnly yes
             StrictHostKeyChecking accept-new
@@ -150,7 +153,9 @@ jobs:
           ssh vmalmyzhe 'bash -s' "${{ github.sha }}" <<'REMOTE'
           set -e
           SHA="$1"
-          BASE=/home/valstan/vmalmyzhe
+          # Корень релизов — в $HOME пользователя деплоя (heredoc закавычен,
+          # $HOME раскрывается на боксе). Абсолютный путь в репо не держим (D-038).
+          BASE="$HOME/vmalmyzhe"
           REL="$BASE/releases/$SHA"
           rm -rf "$REL"; mkdir -p "$REL"
           tar xzf /tmp/vmalmyzhe-app.tgz -C "$REL"
@@ -158,7 +163,7 @@ jobs:
           # Персистентное медиа: staticDir = <release>/public/media лежит внутри
           # релиз-директории, которую деплой пересоздаёт. Подменяем на симлинк в
           # общий каталог $BASE/shared/media, переживающий релизы. На проде также
-          # MEDIA_DIR в /etc/vmalmyzhe/vmalmyzhe.env может указывать сюда же.
+          # MEDIA_DIR в prod-env может указывать сюда же.
           mkdir -p "$BASE/shared/media"
           rm -rf "$REL/public/media"
           ln -sfn "$BASE/shared/media" "$REL/public/media"

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Шаг 1 публикации: выгрузить свежие посты сообщества из ВК через шлюз SARAFAN.
 //
-//   SARAFAN_GATEWAY_KEY=… node scripts/vk-fetch.mjs [сколько] [файл]
+//   SARAFAN_GATEWAY_URL=… SARAFAN_GATEWAY_KEY=… node scripts/vk-fetch.mjs [сколько] [файл]
 //   по умолчанию: 50 постов в scripts/.work/wall.json
 //
-// Ключ читается из окружения или из web/.env (в репо не попадает, #008).
+// Ключ И адрес шлюза читаются из окружения или из web/.env (в репо не попадают:
+// ключ — #008, адрес — хост чужого прод-бокса, репо публичный, D-038).
 // Контракт шлюза — setka/docs/GATEWAY.md, канал описан в AGENTS.md.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
@@ -12,7 +13,6 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const GATEWAY = 'https://3931b3fe50ab.vps.myjino.ru/api/gateway/call'
 
 // «МАЛМЫЖ - ИНФО | Афиша, новости, события» (screen_name malmig_info).
 export const OWNER_ID = -158787639
@@ -36,7 +36,17 @@ const key = process.env.SARAFAN_GATEWAY_KEY || readEnvFile('SARAFAN_GATEWAY_KEY'
 if (!key) {
   console.error(
     'Нет SARAFAN_GATEWAY_KEY (ни в окружении, ни в web/.env).\n' +
-      'Выдаётся на боксе Сетки: python scripts/issue_gateway_key.py VMALMYZHE --rotate',
+      'Выдаёт администратор шлюза Сарафана (контракт — setka/docs/GATEWAY.md).',
+  )
+  process.exit(1)
+}
+
+// Полный URL метода шлюза, например https://<хост Сетки>/api/gateway/call.
+const GATEWAY = process.env.SARAFAN_GATEWAY_URL || readEnvFile('SARAFAN_GATEWAY_URL')
+if (!GATEWAY) {
+  console.error(
+    'Нет SARAFAN_GATEWAY_URL (ни в окружении, ни в web/.env).\n' +
+      'Адрес шлюза — в локальном неотслеживаемом docs/INFRA.local.md.',
   )
   process.exit(1)
 }

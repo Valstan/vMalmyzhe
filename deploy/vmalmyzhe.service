@@ -1,8 +1,14 @@
-# вМалмыже.РФ — systemd-юнит прод-сервера (Next standalone).
-# Артефакт собирается в CI и распаковывается в releases/<sha>; current → симлинк.
-# Установка на сервере:
-#   sudo cp deploy/vmalmyzhe.service /etc/systemd/system/vmalmyzhe.service
+# вМалмыже.РФ — systemd-юнит прод-сервера (Next standalone). ШАБЛОН.
+# Артефакт собирается в CI и распаковывается в $HOME/vmalmyzhe/releases/<sha>;
+# current → симлинк (см. deploy-prod.yml).
+#
+# Реквизиты бокса (пользователь, путь к prod-env) в репо не держим — он публичный
+# (D-038). Плейсхолдеры подставляются при установке, на самом боксе, из-под
+# пользователя деплоя:
+#   sed -e "s|__DEPLOY_USER__|$USER|g" -e "s|__PROD_ENV__|<путь к prod-env>|g" \
+#       deploy/vmalmyzhe.service | sudo tee /etc/systemd/system/vmalmyzhe.service >/dev/null
 #   sudo systemctl daemon-reload && sudo systemctl enable --now vmalmyzhe
+# Установленная копия на боксе — источник истины; здесь — форма.
 [Unit]
 Description=vMalmyzhe (Next.js standalone)
 After=network.target postgresql.service
@@ -10,10 +16,10 @@ Wants=postgresql.service
 
 [Service]
 Type=simple
-User=valstan
-WorkingDirectory=/home/valstan/vmalmyzhe/current
+User=__DEPLOY_USER__
+WorkingDirectory=/home/__DEPLOY_USER__/vmalmyzhe/current
 # Секреты (DATABASE_URI, PAYLOAD_SECRET, PORT, MEDIA_DIR, …) — вне репо (pool #008).
-EnvironmentFile=/etc/vmalmyzhe/vmalmyzhe.env
+EnvironmentFile=__PROD_ENV__
 # Keep-alive длиннее, чем у любого разумного прокси-пула (G234): при дефолтных
 # 5 с Node закрывает сокет, который прокси считает живым, и не-идемпотентный POST
 # отвечает 502 при пустых логах приложения. Сегодня гонка не воспроизводима —
