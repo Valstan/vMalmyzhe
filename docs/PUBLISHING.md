@@ -14,20 +14,20 @@ node scripts/vk-import.mjs отбор.json --dry   # проверить, нич�
 node scripts/vk-import.mjs отбор.json         # залить
 ```
 
-Заливать **лучше с прод-бокса** — там оба секрета уже лежат:
-
-```bash
-scp scripts/vk-import.mjs scripts/.work/wall.json отбор.json GONBA:/tmp/vkimport/
-ssh GONBA 'cd /tmp/vkimport && set -a; . <(sudo -n cat /etc/vmalmyzhe/vmalmyzhe.env); set +a; node vk-import.mjs отбор.json'
-ssh GONBA 'rm -rf /tmp/vkimport'
-```
+Заливать **лучше с прод-бокса** — там оба секрета уже лежат в prod-env, и их
+не надо никуда переносить. Схема: `scp` скрипта, выгрузки и отбора во временный
+каталог на боксе → `ssh` туда, подгрузить prod-env в окружение (`set -a; . <(sudo -n
+cat <prod-env>); set +a`) и запустить `node vk-import.mjs отбор.json` → снести
+временный каталог. Готовые команды с SSH-алиасом и путями — в **локальном
+неотслеживаемом `docs/INFRA.local.md`** (репозиторий публичный, реквизиты бокса
+в отслеживаемых файлах не держим — D-038).
 
 ## 1. Что где лежит
 
 | Что | Где | Зачем |
 |---|---|---|
 | `SARAFAN_GATEWAY_KEY` | `web/.env` на машине владельца | **читать** ВК через шлюз Сарафана |
-| `GATEWAY_KEY_VMALMYZHE` | `/etc/vmalmyzhe/vmalmyzhe.env` (Бокс 1) | **доставлять** пост в наш ingest |
+| `GATEWAY_KEY_VMALMYZHE` | prod-env на прод-боксе | **доставлять** пост в наш ingest |
 | `INGEST_PUBLISH_KEY` | там же | **право публиковать**, а не только доставлять |
 
 ⚠️ Первые два носят почти одинаковые имена и означают **противоположные**
