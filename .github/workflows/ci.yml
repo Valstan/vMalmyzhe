@@ -54,6 +54,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "false"   # токен read-only, комментарии в PR не нужны — есть summary
+          # Без этого action v3 ставит НЕ latest, а зашитый в его код 8.24.3
+          # (комментарий в исходнике обещает latest — код говорит иначе).
+          # Пин явный: свежие дефолтные правила и воспроизводимый прогон.
+          GITLEAKS_VERSION: "8.30.1"
 
       - uses: actions/setup-node@v5
         with:
