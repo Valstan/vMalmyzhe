@@ -13,9 +13,15 @@ name: CI
 #   lint      — нарушили rules-of-hooks                      → exit 1
 #   lint      — нарочно внесли `any` после поднятия правил в error → exit 1
 #   deadcode  — нарочно внесли unused-export (__probe)       → exit 1
+#   secrets   — подсадной случайный токен в одноразовой ветке → exit 1,
+#               значение в логе не печатается (--redact); см. .gitleaks.toml
 #
 # build здесь намеренно НЕ гоняем: Payload лезет в БД на пререндере, поднимать
 # Postgres в CI ради этого дороже пользы — сборка проверяется в deploy-prod.yml.
+#
+# Сканер секретов живёт ШАГОМ внутри `gates`, а не отдельным workflow: `gates` —
+# обязательная проверка в защите ветки (с 2026-08-17), значит красный сканер
+# блокирует мерж на сервере без отдельной настройки required checks.
 
 on:
   pull_request:
@@ -26,11 +32,32 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          # Полная история: без неё сканер видит один коммит и зелен ровно в том
+          # сценарии, ради которого ставится (секрет во втором коммите PR).
+          fetch-depth: 0
+
+      # Сканер секретов — мандат brain 2026-08-17 (репо публичный, D-030).
+      # Действие само передаёт --redact и --exit-code=2 → job красный на находке.
+      # Правила: дефолт gitleaks + свои (VK/Telegram/наши env-имена/postgres-URI)
+      # из .gitleaks.toml в корне — gitleaks подхватывает его автоматически.
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"   # токен read-only, комментарии в PR не нужны — есть summary
+          # Без этого action v3 ставит НЕ latest, а зашитый в его код 8.24.3
+          # (комментарий в исходнике обещает latest — код говорит иначе).
+          # Пин явный: свежие дефолтные правила и воспроизводимый прогон.
+          GITLEAKS_VERSION: "8.30.1"
 
       - uses: actions/setup-node@v5
         with:
