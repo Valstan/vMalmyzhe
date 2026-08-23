@@ -1,0 +1,83 @@
+# Конфиг gitleaks для PR-гейта (шаг «Secret scan» в .github/workflows/ci.yml).
+#
+# Зачем: репозиторий публичный с 2026-08-17 (D-030). Утёкший секрет считается
+# скомпрометированным с секунды пуша — форки/зеркала/кэши не отозвать, «удалить
+# коммит» не лечит (#060: ротация доминирует переписывание истории). Гейт ловит
+# ДО мержа; после утечки порядок один: отозвать → выпустить новый → снять файл
+# с учёта. Историю не переписывать — main защищён.
+#
+# Дефолтные правила gitleaks (≈220) остаются. Ниже — классы, которых в дефолте
+# НЕТ или которые он ловит только по контексту, а в портфеле они реально утекали
+# (#170: гейт пробуют тем классом, который у тебя ходит, а не примером вендора):
+#   • vk-access-token            — VK-токен дефолт не видит вовсе (утёк у соседа 23.08)
+#   • telegram-bot-token-anywhere— дефолт требует слово «telegr» рядом, токен в
+#                                  URL api.telegram.org/bot… пропускает
+#   • vmalmyzhe-env-secret       — наши секреты ПО ИМЕНИ переменной, без порога
+#                                  энтропии: любое значение ≥ 12 символов
+#   • postgres-uri-with-password — connection string с паролем
+#
+# Приёмка (#114, мутационная): подсадной СЛУЧАЙНЫЙ токен под названным правилом
+# в одноразовой ветке → красный прогон; значение в логе не печатается
+# (--redact). Примеры из документации вендоров (AKIAIOSFODNN7EXAMPLE и т.п.)
+# в allowlist самого gitleaks — ими гейт НЕ проверяется (G258).
+
+title = "vMalmyzhe secret scan"
+
+[extend]
+useDefault = true
+
+# ─── VK ──────────────────────────────────────────────────────────────────────
+[[rules]]
+id = "vk-access-token"
+description = "VK access token (vk1.a.… — user/community/service token)"
+regex = '''\bvk1\.a\.[A-Za-z0-9_-]{60,}'''
+keywords = ["vk1.a."]
+
+# ─── Telegram (без требования контекста) ─────────────────────────────────────
+[[rules]]
+id = "telegram-bot-token-anywhere"
+description = "Telegram bot token в любом месте строки, включая URL api.telegram.org/bot<token>/…"
+# Без ведущего \b: в URL токен идёт сразу за «bot» (…/bot123456789:AA…),
+# а между буквой и цифрой границы слова нет — с \b правило пропускало бы
+# ровно тот случай, ради которого заведено.
+regex = '''[0-9]{8,10}:A[A-Za-z0-9_-]{34}\b'''
+
+# ─── Наши секреты по имени переменной ────────────────────────────────────────
+[[rules]]
+id = "vmalmyzhe-env-secret"
+description = "Значение одного из секретов проекта рядом с его именем (ключи шлюза Сарафана, ключ публикации ingest, токен комнаты КАРМАНа, PAYLOAD_SECRET, SMTP_PASS)"
+regex = '''(?i)\b(?:SARAFAN_GATEWAY_KEY|GATEWAY_KEY_VMALMYZHE|INGEST_PUBLISH_KEY|SECRETS_TOKEN|PAYLOAD_SECRET|SMTP_PASS)\b[ \t]*[=:][ \t]*["']?([A-Za-z0-9_\-./+=]{12,})'''
+keywords = [
+  "sarafan_gateway_key",
+  "gateway_key_vmalmyzhe",
+  "ingest_publish_key",
+  "secrets_token",
+  "payload_secret",
+  "smtp_pass",
+]
+[[rules.allowlists]]
+description = "Плейсхолдеры и ссылки на окружение — не значения"
+regexes = [
+  '''^process\.env\.''',
+  '''^(?i)(?:change[-_]?me|your[-_]|example|placeholder|dummy|redacted|xxx+)''',
+  # kebab-case прозой без цифр (например CI-заглушка ci-build-only-secret-not-used-at-runtime)
+  '''^[a-z]+(?:-[a-z]+){2,}$''',
+]
+
+# ─── PostgreSQL connection string с паролем ──────────────────────────────────
+[[rules]]
+id = "postgres-uri-with-password"
+description = "postgres(ql)://user:password@host — пароль внутри URI"
+regex = '''\bpostgres(?:ql)?://[^:/\s@]+:([^@\s]{4,})@[^\s"']+'''
+keywords = ["postgres://", "postgresql://"]
+[[rules.allowlists]]
+description = "Тривиальные пароли локальной БД"
+regexes = [
+  '''^(?i)(?:postgres|password|pass(?:word)?|secret|changeme|example|test|\$\{.*|<.*>)$''',
+]
+[[rules.allowlists]]
+description = "Локальный хост — CI-сборка и dev"
+regexTarget = "line"
+regexes = [
+  '''@(?:localhost|127\.0\.0\.1|db|postgres)(?::\d+)?/''',
+]
