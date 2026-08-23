@@ -41,3 +41,5 @@ corepack pnpm -C web dev            # http://localhost:3004  ·  админка 
 Сборка едет в CI (GitHub Actions), на сервер по SSH кладётся standalone-артефакт,
 рестартится systemd-юнит `vmalmyzhe.service`. Подробности — в `.github/workflows/deploy-prod.yml`.
 Секреты/переменные репозитория и подготовку бокса делает оркестратор (brain).
+
+<!-- probe: benign commit #1 for fetch-depth check -->
