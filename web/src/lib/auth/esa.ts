@@ -18,13 +18,13 @@ export type EsaConfig = {
 
 // Issuer ЕСА — вход.вмалмыже.рф. В коде только punycode (G133): кириллический
 // хост в сравнении молча не совпадёт, а в CI-bash ещё и бьётся.
-export const ESA_ISSUER_DEFAULT = 'https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai'
+const ESA_ISSUER_DEFAULT = 'https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai'
 
 // Открытый идентификатор клиента, выданный Сарафаном 25.08.
-export const ESA_CLIENT_ID_DEFAULT = 'portal'
+const ESA_CLIENT_ID_DEFAULT = 'portal'
 
 // Путь колбэка. Зарегистрирован у Сарафана в punycode-форме хоста.
-export const ESA_CALLBACK_PATH = '/api/auth/callback'
+const ESA_CALLBACK_PATH = '/api/auth/callback'
 
 // WHATWG URL Node каноникализирует хост в punycode и приводит регистр, так что
 // «https://вмалмыже.рф» и «https://xn--80adkdyec4j.xn--p1ai» дают одну строку.
