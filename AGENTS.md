@@ -78,7 +78,9 @@ urgency: low | normal | high
 ## Гейты и деплой
 
 - Гейты перед PR, если трогался код: `corepack pnpm lint && corepack pnpm typecheck &&
-  corepack pnpm test`. `ci.yml` гоняет те же три на каждом PR.
+  corepack pnpm test && corepack pnpm deadcode`. `ci.yml` гоняет те же четыре на
+  каждом PR; `deadcode` (knip) валит неиспользуемый экспорт — константы только для
+  модуля не экспортировать.
 - **`build` требует локальный Postgres** — Payload обращается к БД на пререндере; если
   поднять его нельзя, скажи об этом прямо и положись на сборку в `deploy-prod.yml`,
   не выдавая непроверенное за проверенное.
