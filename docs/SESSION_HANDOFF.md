@@ -3,22 +3,28 @@
 > Sticky-note для непрерывности сессий. Перезаписывается `/close_session`. История — `git log -- docs/SESSION_HANDOFF.md`.
 
 **Status:** ACTIVE — портал наполнен живым контентом из ВК, аналитика включена, vault-контур замкнут, гейты настоящие (CI на PR + тесты + **сканер секретов**), репозиторий **публичный** с 17.08 и вычищен от инфра-деталей (D-038)
-**Updated:** 2026-09-02 (нитка: почта 25.08–02.09 — шаг 1 из 3: D-066 `/obriv` снят, D-046 в каноне, хук `SessionStart`; handoff теперь едет в том же PR, что и шаг)
+**Updated:** 2026-09-02 (нитка: почта 25.08–02.09 — шаг 2: ЕСА `redirect_uri` зафиксирован кодом и тестом, письмо Сарафану через brain; PR #49 — D-066/D-046/хук)
 
 ## Где мы и что дальше (2026-09-02)
 
-Разобраны 8 писем brain после 23.08. Этот PR закрывает два мандата
-(`/obriv` удалён, D-046 «текст файлом» в `AGENTS.md`), косметику аудита
-Fable 5.1 и рекомендацию про хук `SessionStart` (`.claude/scripts/session_start.sh`).
+Разобраны 8 писем brain после 23.08. PR #49 закрыл два мандата (`/obriv`
+удалён, D-046 «текст файлом» в `AGENTS.md`), косметику аудита Fable 5.1 и
+хук `SessionStart`. PR #50 — первый шаг ЕСА: `web/src/lib/auth/esa.ts`
+(конфиг + `buildRedirectUri`, 12 тестов), `.env.example`, письмо
+`mailbox/to-brain/2026-09-02-esa-redirect-uri-exact-string.md` со строкой
+`https://xn--80adkdyec4j.xn--p1ai/api/auth/callback`.
 
 **Дальше, по порядку:**
 
-1. **ЕСА-вход (mandate high, письмо 25.08).** Клиент выдан: `client_id=portal`,
-   секрет `ESA_CLIENT_SECRET_PORTAL` в комнате `setka`, grant действует.
-   Первый подшаг — написать код, строящий `redirect_uri`, и отправить Сарафану
-   через `mailbox/to-brain/` **точную строку байт в байт** (Node `new URL().href`
-   даёт punycode) — ДО отладки. Потом vault-клиент → OIDC (PKCE S256,
-   scopes `openid profile email`). Ждут `ack: report`.
+1. **ЕСА-вход, поток (mandate high, письмо 25.08).** Ждём подтверждения
+   строки от Сарафана (через brain), параллельно можно писать поток по
+   рецепту `trener/web/src/lib/auth/oidc.ts` (read-only): маршруты
+   `/api/auth/start` и `/api/auth/callback`, PKCE + state + nonce в
+   подписанной httpOnly-cookie, `jose` remote-JWKS с деградацией, связывание
+   по `email_verified`, локальная сессия. Секрет `ESA_CLIENT_SECRET_PORTAL`
+   в prod-env кладёт владелец (комната `setka` → grant → зеркало); пока пусто —
+   `getEsaConfig()` = null, вход выключен. Что за входом — открытый вопрос
+   владельца (письмо brain 26.07), до ответа — только вход и узнавание.
 2. **Recon в логах CI (recommend, 29.08 + 01.09):** `vars` → `secrets` для хостов
    и путей, дампы при падении урезать (`systemctl show -p …`, `journalctl -o cat`),
    приёмка по настоящему выводу прогона. Ответ brain — только если нашлось.
