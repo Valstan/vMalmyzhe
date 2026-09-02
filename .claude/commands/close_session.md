@@ -43,9 +43,9 @@ gh pr list --state open
 ```bash
 git checkout -b docs/handoff-<slug>
 git add docs/SESSION_HANDOFF.md
-git commit -m "docs: handoff — <резюме>"
+git commit -F <файл-с-сообщением>      # D-046: текст с кириллицей — файлом, не -m
 git push -u origin docs/handoff-<slug>
-gh pr create ... ; gh pr merge --squash --delete-branch
+gh pr create --body-file <файл> ... ; gh pr merge --squash --delete-branch
 git checkout main && git pull --ff-only
 ```
 
