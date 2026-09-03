@@ -1,0 +1,121 @@
+# Настроить рантайм-доступ портала к комнате КАРМАНа — одна строка конфига в
+# prod-env, ни одного значения секрета.
+#
+# Зачем: секрет ЕСА выпущен Сарафаном и живёт ТОЛЬКО в нашей комнате (D-061,
+# амендмент спеки vault-client 03.09). Портал достаёт его сам —
+# `web/src/lib/secretsVault.ts`, ленивый до-тяг в момент использования. Для
+# этого клиенту нужны две переменные в prod-env: `SECRETS_TOKEN` (лежит с 03.08)
+# и `SECRETS_VAULT_URL` (адрес КАРМАНа). Этот workflow доводит вторую.
+#
+# Секрет ЕСА через раннера НЕ ходит: его тянет сам процесс на боксе. Здесь
+# печатаются только HTTP-коды и факт наличия строк — никаких значений.
+#
+# Адрес КАРМАНа не хранится отдельно: он на том же Боксе 1, что и портал,
+# поэтому собирается из `secrets.DEPLOY_SSH_HOST`. Проба с бокса подтверждает
+# адрес до записи — если vault живёт не там, шаг краснеет, а не пишет мусор.
+#
+# Режимы: check (по умолчанию) — только показать состояние; apply — дописать
+# строку, если её нет, и перезапустить сервис.
+
+name: Apply vault config (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check — только показать; apply — дописать SECRETS_VAULT_URL и перезапустить'
+        type: choice
+        options: [check, apply]
+        default: check
+
+concurrency:
+  group: vmalmyzhe-prod-ssh
+  cancel-in-progress: false
+
+jobs:
+  vault-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ] || [ -z "$DEPLOY_SSH_USER" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / secrets.DEPLOY_SSH_USER"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_vmalmyzhe
+          chmod 600 ~/.ssh/id_ed25519_vmalmyzhe
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host vmalmyzhe
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User $DEPLOY_SSH_USER
+            IdentityFile ~/.ssh/id_ed25519_vmalmyzhe
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Состояние и проба комнаты (с бокса, без значений)
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+          VAULT_BASE: https://${{ secrets.DEPLOY_SSH_HOST }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -eo pipefail
+          ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" "$VAULT_BASE" "$MODE" <<'REMOTE'
+          set -eo pipefail
+          ENV_FILE="$1"; VAULT_BASE="$2"; MODE="$3"
+          NAME=ESA_CLIENT_SECRET_PORTAL
+
+          has() { sudo -n grep -q "^$1=" "$ENV_FILE" && echo yes || echo no; }
+          echo "prod-env: SECRETS_TOKEN=$(has SECRETS_TOKEN) SECRETS_VAULT_URL=$(has SECRETS_VAULT_URL) $NAME=$(has "$NAME")"
+
+          TOKEN=$(sudo -n grep '^SECRETS_TOKEN=' "$ENV_FILE" | head -1 | sed 's/^SECRETS_TOKEN=//;s/^"//;s/"$//')
+          [ -n "$TOKEN" ] || { echo "::error::SECRETS_TOKEN в prod-env нет — токен комнаты положен 03.08, проверьте"; exit 1; }
+
+          # Проба: адрес верен, если комната отвечает HTTP-кодом. 200 — grant
+          # виден, 404 — не виден, 401 — токен отозван, 000 — не тот адрес.
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+            -H "Authorization: Bearer $TOKEN" \
+            "$VAULT_BASE/api/secrets?key=$NAME" || true)
+          echo "vault $NAME: HTTP $code"
+          case "$code" in
+            200) ;;
+            404) echo "::error::404 — grant setka→vmalmyzhe на $NAME комнате не виден"; exit 1 ;;
+            401) echo "::error::401 — токен комнаты отозван или битый"; exit 1 ;;
+            *)   echo "::error::HTTP $code — по этому адресу комнаты нет, SECRETS_VAULT_URL не пишем"; exit 1 ;;
+          esac
+
+          # Контроль от обратного (#104): до применения вход обязан быть выключен.
+          echo "до применения /api/auth/me: $(curl -s --max-time 10 http://127.0.0.1:3004/api/auth/me || echo '(нет ответа)')"
+
+          [ "$MODE" = "apply" ] || { echo "режим check — env не трогаю"; exit 0; }
+
+          if sudo -n grep -q '^SECRETS_VAULT_URL=' "$ENV_FILE"; then
+            echo "SECRETS_VAULT_URL уже задан — не трогаю"
+          else
+            TMP=$(mktemp)
+            sudo -n cat "$ENV_FILE" > "$TMP"
+            printf 'SECRETS_VAULT_URL=%s\n' "$VAULT_BASE" >> "$TMP"
+            sudo -n cp --no-preserve=mode,ownership "$TMP" "$ENV_FILE.new"
+            sudo -n chown --reference="$ENV_FILE" "$ENV_FILE.new"
+            sudo -n chmod --reference="$ENV_FILE" "$ENV_FILE.new"
+            sudo -n mv "$ENV_FILE.new" "$ENV_FILE"
+            rm -f "$TMP"
+            echo "SECRETS_VAULT_URL дописан"
+          fi
+
+          sudo systemctl restart vmalmyzhe
+          sleep 6
+          echo "после применения /api/auth/me: $(curl -s --max-time 10 http://127.0.0.1:3004/api/auth/me || echo '(нет ответа)')"
+          REMOTE

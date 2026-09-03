@@ -26,6 +26,10 @@ const ESA_CLIENT_ID_DEFAULT = 'portal'
 // Путь колбэка. Зарегистрирован у Сарафана в punycode-форме хоста.
 const ESA_CALLBACK_PATH = '/api/auth/callback'
 
+// Имя секрета — одно на весь код: так же он назван в комнате КАРМАНа, в
+// allowlist клиента комнаты (`lib/secretsVault.ts`) и в `.env.example`.
+export const ESA_SECRET_NAME = 'ESA_CLIENT_SECRET_PORTAL'
+
 // WHATWG URL Node каноникализирует хост в punycode и приводит регистр, так что
 // «https://вмалмыже.рф» и «https://xn--80adkdyec4j.xn--p1ai» дают одну строку.
 // Хвостовой слэш снимаем только у корня (`new URL('https://h').href` → `https://h/`),
@@ -51,7 +55,7 @@ export const buildRedirectUri = (serverUrl: string): string | null =>
 // Имя секрета в prod-env — ESA_CLIENT_SECRET_PORTAL (так он выдан в комнату
 // КАРМАНа; prod-env — источник истины, комната держит зеркало, #171).
 export const getEsaConfig = (): EsaConfig | null => {
-  const clientSecret = process.env.ESA_CLIENT_SECRET_PORTAL
+  const clientSecret = process.env[ESA_SECRET_NAME]
   if (!clientSecret) return null
 
   const issuer = normalizeUrl(process.env.ESA_ISSUER_URL || ESA_ISSUER_DEFAULT)

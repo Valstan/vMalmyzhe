@@ -9,7 +9,7 @@ import { authEnv, clearSessionCookie } from '../_shared'
 export const dynamic = 'force-dynamic'
 
 export const POST = async (req: NextRequest): Promise<Response> => {
-  const env = authEnv(req.nextUrl.origin)
+  const env = await authEnv(req.nextUrl.origin)
   if (!env) return new Response('Not Found', { status: 404 })
   const res = NextResponse.redirect(new URL('/', env.serverUrl), 303)
   clearSessionCookie(res)

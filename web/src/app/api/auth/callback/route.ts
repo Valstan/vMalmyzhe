@@ -24,7 +24,7 @@ import { TX_COOKIE, authEnv, clearTxCookie, isSecure } from '../_shared'
 export const dynamic = 'force-dynamic'
 
 export const GET = async (req: NextRequest): Promise<Response> => {
-  const env = authEnv(req.nextUrl.origin)
+  const env = await authEnv(req.nextUrl.origin)
   if (!env) return new Response('Not Found', { status: 404 })
 
   const fail = (reason: string): Response => {
