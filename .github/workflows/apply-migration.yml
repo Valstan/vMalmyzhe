@@ -9,13 +9,13 @@ name: Apply DB migration (manual)
 # Идемпотентность — на стороне .sql (ADD COLUMN IF NOT EXISTS). Запись в
 # payload_migrations — best-effort.
 #
-# NB: DATABASE_URI читается на боксе из prod-env (путь — vars.PROD_ENV_FILE);
+# NB: DATABASE_URI читается на боксе из prod-env (путь — secrets.PROD_ENV_FILE);
 # файл недоступен пользователю деплоя напрямую, поэтому `sudo -n grep`.
 #
 # Требует те же доступы, что deploy-prod.yml (значения — только в настройках
 # репозитория, не в файлах: репо публичный, D-038):
-#   secrets.SSH_PRIVATE_KEY, vars.DEPLOY_SSH_HOST, vars.DEPLOY_SSH_PORT,
-#   vars.DEPLOY_SSH_USER, vars.PROD_ENV_FILE
+#   secrets.SSH_PRIVATE_KEY, secrets.DEPLOY_SSH_HOST, vars.DEPLOY_SSH_PORT,
+#   secrets.DEPLOY_SSH_USER, secrets.PROD_ENV_FILE
 
 on:
   workflow_dispatch:
@@ -39,14 +39,14 @@ jobs:
       - name: Setup SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
-          DEPLOY_SSH_USER: ${{ vars.DEPLOY_SSH_USER }}
-          PROD_ENV_FILE: ${{ vars.PROD_ENV_FILE }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
         run: |
           set -e
           if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ] || [ -z "$DEPLOY_SSH_USER" ] || [ -z "$PROD_ENV_FILE" ]; then
-            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / vars.DEPLOY_SSH_USER / vars.PROD_ENV_FILE"
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / secrets.DEPLOY_SSH_USER / secrets.PROD_ENV_FILE"
             exit 1
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -67,7 +67,7 @@ jobs:
 
       - name: Preflight (read-only)
         env:
-          PROD_ENV_FILE: ${{ vars.PROD_ENV_FILE }}
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
         run: |
           set -e
           ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
@@ -80,7 +80,7 @@ jobs:
 
       - name: Apply migration
         env:
-          PROD_ENV_FILE: ${{ vars.PROD_ENV_FILE }}
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
         run: |
           set -e
           SQL="web/src/migrations/${{ inputs.migration }}.sql"

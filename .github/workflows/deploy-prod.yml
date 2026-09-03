@@ -6,10 +6,14 @@ name: Deploy to production
 # Требуется (значения — только в настройках репозитория, не в файлах: репо
 # публичный, D-038 — реквизиты бокса в отслеживаемых файлах не держим):
 #   secrets.SSH_PRIVATE_KEY        — приватная часть деплой-ключа
-#   vars.DEPLOY_SSH_HOST           — хост прод-сервера
-#   vars.DEPLOY_SSH_PORT           — внешний SSH-порт
-#   vars.DEPLOY_SSH_USER           — пользователь деплоя на боксе (его $HOME — корень релизов)
+#   secrets.DEPLOY_SSH_HOST        — хост прод-сервера
+#   vars.DEPLOY_SSH_PORT           — внешний SSH-порт (осознанно в vars: короткое
+#                                    значение в secrets замазало бы весь лог, #223)
+#   secrets.DEPLOY_SSH_USER        — пользователь деплоя на боксе (его $HOME — корень релизов)
 #   vars.NEXT_PUBLIC_SERVER_URL    — боевой домен (punycode вмалмыже.рф; бейкается в бандл при сборке)
+# Хост, пользователь и путь prod-env — в secrets, не в vars: значения vars
+# раскрываются в публичном логе прогона, маскируются только secrets (письмо
+# brain 29.08, pool #223). Логи публичного репо публичны.
 # Секреты рантайма (DATABASE_URI, PAYLOAD_SECRET, …) в CI не нужны: сборка идёт на
 # эфемерной БД с заглушками, на боксе их читает systemd из prod-env вне репо.
 
@@ -121,13 +125,13 @@ jobs:
       - name: Setup SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
-          DEPLOY_SSH_USER: ${{ vars.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
         run: |
           set -e
           if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ] || [ -z "$DEPLOY_SSH_USER" ]; then
-            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / vars.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / vars.DEPLOY_SSH_USER"
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / secrets.DEPLOY_SSH_USER"
             exit 1
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -197,8 +201,20 @@ jobs:
           exit $fail
           REMOTE
 
-      - name: On failure — журналы прода
-        if: failure()
+      # Урезанная диагностика вместо `systemctl status` + `journalctl`: маска
+      # secrets закрывает только точное значение целиком, а `status` печатает
+      # путь юнита, journalctl — короткий хостнейм в каждой строке, ошибка БД —
+      # DATABASE_URI (письмо brain 01.09, #265, G290). Печатаем всегда, не только
+      # при падении: так приёмка редакции идёт по настоящему выводу (#262).
+      - name: Service state + журнал (урезанный, с редакцией)
+        if: always()
         run: |
-          ssh vmalmyzhe "sudo systemctl status vmalmyzhe --no-pager -l" 2>&1 || true
-          ssh vmalmyzhe "sudo journalctl -u vmalmyzhe -n 80 --no-pager" 2>&1 || true
+          ssh vmalmyzhe 'bash -s' <<'REMOTE' 2>&1 || true
+          H="$(hostname -s)"; F="$(hostname -f 2>/dev/null || true)"
+          sudo systemctl show vmalmyzhe -p ActiveState -p SubState -p Result -p ExecMainStatus -p NRestarts
+          sudo journalctl -u vmalmyzhe -n 60 --no-pager -o cat \
+            | sed -E "s#([a-z]+://)[^/@[:space:]]+@#\1***:***@#g" \
+            | sed -E "s#/home/[^/[:space:]]+#/home/[user]#g" \
+            | { if [ -n "$F" ]; then sed "s#$F#[host]#g"; else cat; fi; } \
+            | sed "s#$H#[host]#g"
+          REMOTE
