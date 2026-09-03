@@ -235,9 +235,17 @@ jobs:
                      | map({(.[0]): (.[1:] | join("\t"))}) | add)}' < "$TMP.pairs" > "$TMP"
           rm -f "$TMP.pairs"
 
-          curl -sf -X POST "$VAULT" -H "Authorization: Bearer $TOKEN" \
-            -H 'Content-Type: application/json' --data @"$TMP" > /dev/null \
-            || { echo "::warning::комната не приняла запись"; exit 0; }
+          # Код ответа печатаем всегда: «комната не приняла» без кода — это ровно
+          # тот молчаливый отказ, который спека называет хуже отсутствия шага.
+          # Тело ответа в лог не кладём: в нём может быть эхо присланного.
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$VAULT" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            --data @"$TMP" --max-time 20 || echo 000)
+          case "$CODE" in
+            2*) echo "запись принята (HTTP $CODE)" ;;
+            401|403) echo "::warning::HTTP $CODE — токен комнаты писать не может; запись делает паспорт (ADR-0012)"; exit 0 ;;
+            *) echo "::warning::комната не приняла запись, HTTP $CODE"; exit 0 ;;
+          esac
 
           # Эхо приёмника: читаем обратно и сверяем отпечаток, не значение.
           for NAME in $NAMES; do
