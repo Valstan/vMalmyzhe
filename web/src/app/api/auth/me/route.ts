@@ -11,7 +11,7 @@ import { authEnv } from '../_shared'
 export const dynamic = 'force-dynamic'
 
 export const GET = async (req: NextRequest): Promise<Response> => {
-  const env = authEnv(req.nextUrl.origin)
+  const env = await authEnv(req.nextUrl.origin)
   const noStore = { headers: { 'Cache-Control': 'no-store' } }
   if (!env) return NextResponse.json({ enabled: false, user: null }, noStore)
 
