@@ -80,7 +80,10 @@ jobs:
           has() { sudo -n grep -q "^$1=" "$ENV_FILE" && echo yes || echo no; }
           echo "prod-env: SECRETS_TOKEN=$(has SECRETS_TOKEN) SECRETS_VAULT_URL=$(has SECRETS_VAULT_URL) $NAME=$(has "$NAME")"
 
-          TOKEN=$(sudo -n grep '^SECRETS_TOKEN=' "$ENV_FILE" | head -1 | sed 's/^SECRETS_TOKEN=//;s/^"//;s/"$//')
+          # Неудачный grep гасим: под `set -eo pipefail` он иначе убьёт скрипт до
+          # понятного сообщения ниже.
+          TOKEN=$(sudo -n grep '^SECRETS_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 || true)
+          TOKEN=$(printf '%s' "${TOKEN#*=}" | sed 's/^"\(.*\)"$/\1/')
           [ -n "$TOKEN" ] || { echo "::error::SECRETS_TOKEN в prod-env нет — токен комнаты положен 03.08, проверьте"; exit 1; }
 
           # Проба: адрес верен, если комната отвечает HTTP-кодом. 200 — grant
