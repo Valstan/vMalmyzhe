@@ -205,7 +205,15 @@ jobs:
           ENV_FILE="$1"
           command -v jq >/dev/null || { echo "::warning::jq на боксе нет — зеркалирование пропущено"; exit 0; }
 
-          val() { sudo -n grep "^$1=" "$ENV_FILE" | head -1 | sed "s/^$1=//; s/^\"//; s/\"$//"; }
+          # ⚠️ Отсутствующее имя — норма (не все ключи заведены), поэтому неудачный
+          # grep гасится здесь. Без этого `set -eo pipefail` убивает весь скрипт на
+          # первом же отсутствующем ключе — и шаг падает молча, ничего не напечатав
+          # (поймано живым прогоном 03.09, run 33774054942).
+          val() {
+            local out
+            out=$(sudo -n grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1) || out=""
+            printf '%s' "${out#*=}" | sed 's/^"\(.*\)"$/\1/'
+          }
           TOKEN=$(val SECRETS_TOKEN); VAULT=$(val SECRETS_VAULT_URL)
           [ -n "$TOKEN" ] && [ -n "$VAULT" ] || { echo "::warning::SECRETS_TOKEN/SECRETS_VAULT_URL в prod-env нет — зеркалирование пропущено"; exit 0; }
           VAULT="${VAULT%/}"; case "$VAULT" in */api/secrets) ;; *) VAULT="$VAULT/api/secrets" ;; esac
