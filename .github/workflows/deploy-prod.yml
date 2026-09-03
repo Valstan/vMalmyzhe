@@ -178,6 +178,69 @@ jobs:
           echo "deployed $SHA"
           REMOTE
 
+      # ADR-0006: копия своих секретов — в свою комнату КАРМАНа. Делается С БОКСА,
+      # а не с раннера: наши рантайм-секреты живут только в prod-env и в GitHub
+      # Secrets их нет (#008) — значит, зеркалить с раннера попросту нечего, и
+      # образец Сабантуя (паспорт + значения из secrets) к нашей форме не подходит.
+      # Токен комнаты уже лежит на боксе, значения из него не выходят.
+      #
+      # Allowlist осознанный, а не «всё из prod-env»: зеркалим то, чей ПОВТОРНЫЙ
+      # выпуск стоит чужого труда или сломает чужую сторону. DATABASE_URI намеренно
+      # НЕ зеркалим — пароль привязан к постгресу на этом же боксе, вместе с боксом
+      # теряется и база, так что для восстановления строка бесполезна, а как
+      # содержимое комнаты — самая лакомая строка файла.
+      #
+      # Шаг не блокирующий: отказ зеркала не должен ронять деплой. Проверка —
+      # эхо приёмника (#110), а не «шаг зелёный»: после записи читаем ключ обратно
+      # и сверяем первые символы sha256. Значения в лог не попадают.
+      - name: Зеркалировать свои секреты в комнату vault
+        if: success()
+        continue-on-error: true
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+        run: |
+          set -eo pipefail
+          ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
+          set -eo pipefail
+          ENV_FILE="$1"
+          command -v jq >/dev/null || { echo "::warning::jq на боксе нет — зеркалирование пропущено"; exit 0; }
+
+          val() { sudo -n grep "^$1=" "$ENV_FILE" | head -1 | sed "s/^$1=//; s/^\"//; s/\"$//"; }
+          TOKEN=$(val SECRETS_TOKEN); VAULT=$(val SECRETS_VAULT_URL)
+          [ -n "$TOKEN" ] && [ -n "$VAULT" ] || { echo "::warning::SECRETS_TOKEN/SECRETS_VAULT_URL в prod-env нет — зеркалирование пропущено"; exit 0; }
+          VAULT="${VAULT%/}"; case "$VAULT" in */api/secrets) ;; *) VAULT="$VAULT/api/secrets" ;; esac
+
+          # Якорь: новый СВОЙ секрет в .env.example → добавить и сюда.
+          NAMES="PAYLOAD_SECRET GATEWAY_KEY_VMALMYZHE INGEST_PUBLISH_KEY SARAFAN_GATEWAY_KEY"
+          umask 077; TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
+          # Пары «имя<TAB>значение» на stdin jq — без eval и без подстановки в
+          # строку: значение с пробелом, кавычкой или $ ничего не ломает и в
+          # командную строку (а значит, в `ps`) не попадает. Перевод строки в
+          # значении невозможен: EnvironmentFile его не разбирает.
+          n=0
+          for NAME in $NAMES; do
+            V=$(val "$NAME"); [ -n "$V" ] || { echo "$NAME: нет в prod-env, пропущен"; continue; }
+            printf '%s\t%s\n' "$NAME" "$V"; n=$((n+1))
+          done > "$TMP.pairs"
+          [ "$n" -gt 0 ] || { echo "::warning::зеркалить нечего"; exit 0; }
+          jq -R -s '{secrets: (split("\n") | map(select(length > 0)) | map(split("\t"))
+                     | map({(.[0]): (.[1:] | join("\t"))}) | add)}' < "$TMP.pairs" > "$TMP"
+          rm -f "$TMP.pairs"
+
+          curl -sf -X POST "$VAULT" -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' --data @"$TMP" > /dev/null \
+            || { echo "::warning::комната не приняла запись"; exit 0; }
+
+          # Эхо приёмника: читаем обратно и сверяем отпечаток, не значение.
+          for NAME in $NAMES; do
+            V=$(val "$NAME"); [ -n "$V" ] || continue
+            MINE=$(printf '%s' "$V" | sha256sum | cut -c1-12)
+            THEIRS=$(curl -sf --max-time 15 -H "Authorization: Bearer $TOKEN" "$VAULT?key=$NAME" \
+              | jq -r --arg n "$NAME" '.secrets[$n] // empty' | tr -d '\n' | sha256sum | cut -c1-12)
+            [ "$MINE" = "$THEIRS" ] && echo "$NAME: эхо совпало ($MINE)" || echo "::warning::$NAME: эхо НЕ совпало ($MINE vs $THEIRS)"
+          done
+          REMOTE
+
       - name: Smoke check — local routes (/, /news, /admin)
         run: |
           set -e
