@@ -1,0 +1,58 @@
+# Проба паспорта экосистемы (ADR-0012): доказать, что прогон Actions может
+# открыть сессию в нашей комнате КАРМАНа по удостоверению GitHub, без единого
+# статического токена в GitHub Secrets.
+#
+# КАРМАН завёл нашу личность 03.09: passport_identity id 5,
+# `Valstan/vMalmyzhe` → комната `vmalmyzhe` (rw), привязка по repository_id,
+# ветка `main`. Эта проба — приёмка того, что личность действительно работает:
+# в аудите комнаты должна появиться строка `session_open` от паспорта.
+#
+# Ничего не пишет и не читает из комнаты: открывает сессию, показывает права,
+# отзывает. Значения секретов здесь не участвуют вовсе.
+#
+# ⚠️ На PR-прогоне сессия не откроется (401) — `subject_pattern` КАРМАНа пускает
+# только `refs/heads/main`. Это не дефект, поэтому workflow ручной.
+
+name: Vault passport check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  passport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Открыть и отозвать сессию комнаты по удостоверению прогона
+        env:
+          VAULT_BASE: https://${{ secrets.DEPLOY_SSH_HOST }}
+        run: |
+          set -euo pipefail
+          VAULT="$VAULT_BASE/api/secrets"
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::OIDC недоступен — нужен permissions: id-token: write"; exit 1
+          fi
+
+          # audience — РОВНО эта строка, иначе 401 без пояснений.
+          ASSERTION="$(curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=karman-vault" | jq -r '.value // empty')"
+          [ -n "$ASSERTION" ] || { echo "::error::удостоверение прогона не выдано"; exit 1; }
+          echo "::add-mask::$ASSERTION"
+
+          SESSION="$(curl -sf -X POST "$VAULT/session" -H "Authorization: Bearer $ASSERTION")" \
+            || { echo "::error::сессия не открыта — КАРМАН отверг удостоверение"; exit 1; }
+          TOKEN="$(printf '%s' "$SESSION" | jq -r '.token // empty')"
+          [ -n "$TOKEN" ] || { echo "::error::ответ без token"; exit 1; }
+          # Токен пришёл ОТВЕТОМ, а не из secrets — автоматической маскировки для
+          # него нет (G292). Маскируем сами, до первого использования.
+          echo "::add-mask::$TOKEN"
+          # Самоотзыв в любом исходе; второй trap EXIT затёр бы первый (G291).
+          trap 'curl -sf -X DELETE "$VAULT/session" -H "Authorization: Bearer $TOKEN" >/dev/null 2>&1 || true' EXIT
+
+          echo "сессия открыта; canWrite=$(printf '%s' "$SESSION" | jq -r '.canWrite // false')"
+          echo "паспорт работает — в аудите комнаты должна быть строка session_open"
