@@ -108,6 +108,26 @@ img {
 .utility-bar { background: var(--color-teal); color: #fff; font-size: .78rem; }
 .utility-bar__inner { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .utility-bar a { color: #fff2b8; font-weight: 700; }
+
+/* Вход через ЕСА в верхней полосе — см. AuthBadge. */
+.auth-badge { display: inline-flex; align-items: center; gap: .6rem; }
+.auth-badge__login,
+.auth-badge__logout {
+  display: inline-block;
+  padding: .2rem .7rem;
+  border: 1px solid rgba(255, 255, 255, .55);
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.auth-badge__login:hover, .auth-badge__logout:hover { background: rgba(255, 255, 255, .14); color: #fff; text-decoration: none; }
+.auth-badge__user { display: inline-flex; align-items: center; gap: .5rem; margin: 0; }
+.auth-badge__name { font-weight: 700; }
+.auth-badge__notice { color: #fff2b8; }
 .header-search { margin-left: auto; display: flex; width: min(430px, 42vw); border: 1px solid var(--color-border); border-radius: 999px; background: #fff; overflow: hidden; }
 .header-search:focus-within { outline: 3px solid rgba(212, 163, 42, .35); border-color: var(--color-teal); }
 .header-search input { min-width: 0; flex: 1; border: 0; padding: .7rem 1rem; background: transparent; font: inherit; font-size: .9rem; outline: 0; }
