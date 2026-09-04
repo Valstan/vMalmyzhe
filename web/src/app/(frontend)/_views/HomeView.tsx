@@ -2,7 +2,7 @@ import Link from 'next/link'
 import config from '@payload-config'
 import { getPayload } from 'payload'
 
-import { withRetry } from '../../../lib/withRetry'
+import { degraded, withRetry } from '../../../lib/withRetry'
 import { findPosts, getSections } from '../../../lib/portal'
 import { BannerSlot, getFeedBanners } from '../components/BannerSlot'
 import { PostList, SectionChips } from '../components/PostList'
@@ -20,8 +20,8 @@ async function getHome(): Promise<Home | null> {
       const payload = await getPayload({ config })
       return (await payload.findGlobal({ slug: 'home', depth: 0 })) as Home
     })
-  } catch {
-    return null
+  } catch (err) {
+    return degraded('HomeView/getHome', null, err)
   }
 }
 
