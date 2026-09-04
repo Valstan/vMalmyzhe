@@ -18,6 +18,10 @@ type DiscoveryDoc = {
   authorization_endpoint: string
   token_endpoint: string
   jwks_uri: string
+  // RP-initiated logout появился у ЕСА 04.09.2026 — поле необязательное: старый
+  // документ (или кэш до передеплоя) не должен ломать выход, он деградирует
+  // до локального.
+  end_session_endpoint?: string
 }
 
 // Кэш discovery на процесс: документ меняется только при передеплое ЕСА.
@@ -159,6 +163,36 @@ export const buildAuthorizeUrl = (
   u.searchParams.set('code_challenge', pkceChallenge(tx.verifier))
   u.searchParams.set('code_challenge_method', 'S256')
   return u.toString()
+}
+
+// ── RP-initiated logout (OIDC RP-Initiated Logout 1.0) ───────────────────────
+//
+// Сессия ЕСА живёт кукой домена .вмалмыже.рф: наш POST /logout гасит только
+// портал, и следующий authorize молча авторизует снова (владелец 03.09: «делал
+// Ctrl+F5 — всё равно заходит»). Мандат brain 04.09 — после локального выхода
+// увести человека на end_session, тогда гаснут все сервисы разом.
+//
+// Адрес — из discovery, не литералом. Но документ приходит из сети, а этот
+// редирект единственный в потоке, после которого мы уже ничего не проверяем
+// криптографически (в authorize/token нас страхует подпись id_token): чужой
+// end_session_endpoint превратил бы кнопку «Выйти» в открытый редиректор.
+// Поэтому origin эндпойнта обязан совпасть с origin issuer'а.
+//
+// post_logout_redirect_uri ЕСА принимает, если его origin совпадает с origin
+// любого зарегистрированного redirect_uri клиента, — поэтому собираем его из
+// нашего же redirectUri, а не из NEXT_PUBLIC_SERVER_URL: тот может отличаться
+// (fallback от запроса), и возврат молча ушёл бы на страницу входа ЕСА.
+export const buildEndSessionUrl = (cfg: EsaConfig, discovery: DiscoveryDoc): string | null => {
+  if (!discovery.end_session_endpoint) return null
+  try {
+    const u = new URL(discovery.end_session_endpoint)
+    if (u.origin !== new URL(discovery.issuer).origin) return null
+    u.searchParams.set('client_id', cfg.clientId)
+    u.searchParams.set('post_logout_redirect_uri', `${new URL(cfg.redirectUri).origin}/`)
+    return u.toString()
+  } catch {
+    return null
+  }
 }
 
 // code → токены. Аутентификация клиента — client_secret_post (без граблей

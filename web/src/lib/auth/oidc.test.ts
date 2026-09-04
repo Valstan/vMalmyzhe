@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { EsaConfig } from './esa'
 import {
   buildAuthorizeUrl,
+  buildEndSessionUrl,
   extractClaims,
   open,
   openTransaction,
@@ -100,6 +101,45 @@ describe('buildAuthorizeUrl', () => {
     expect(u.searchParams.get('nonce')).toBe('N')
     expect(u.searchParams.get('code_challenge')).toBe(pkceChallenge('V'))
     expect(u.searchParams.get('code_challenge_method')).toBe('S256')
+  })
+})
+
+describe('buildEndSessionUrl — RP-initiated logout', () => {
+  const withEndSession = { ...discovery, end_session_endpoint: `${cfg.issuer}/oidc/logout` }
+
+  it('строка мандата: client_id + post_logout_redirect_uri в origin нашего redirect_uri', () => {
+    const u = new URL(buildEndSessionUrl(cfg, withEndSession) as string)
+    expect(u.origin + u.pathname).toBe(withEndSession.end_session_endpoint)
+    expect(u.searchParams.get('client_id')).toBe('portal')
+    expect(u.searchParams.get('post_logout_redirect_uri')).toBe(
+      'https://xn--80adkdyec4j.xn--p1ai/',
+    )
+  })
+
+  it('возврат берётся из redirectUri, а не из хоста ЕСА', () => {
+    const u = new URL(buildEndSessionUrl(cfg, withEndSession) as string)
+    const back = new URL(u.searchParams.get('post_logout_redirect_uri') as string)
+    expect(back.origin).toBe(new URL(cfg.redirectUri).origin)
+    expect(back.origin).not.toBe(new URL(cfg.issuer).origin)
+  })
+
+  it('нет end_session_endpoint (старый деплой ЕСА) → null, выход деградирует до локального', () => {
+    expect(buildEndSessionUrl(cfg, discovery)).toBeNull()
+    expect(buildEndSessionUrl(cfg, { ...discovery, end_session_endpoint: '' })).toBeNull()
+  })
+
+  it('чужой origin в документе → null: «Выйти» не становится открытым редиректором', () => {
+    expect(
+      buildEndSessionUrl(cfg, { ...discovery, end_session_endpoint: 'https://evil.example/logout' }),
+    ).toBeNull()
+    expect(
+      buildEndSessionUrl(cfg, { ...discovery, end_session_endpoint: `${cfg.issuer}:8443/logout` }),
+    ).toBeNull()
+  })
+
+  it('битый адрес в документе → null, а не исключение', () => {
+    expect(buildEndSessionUrl(cfg, { ...discovery, end_session_endpoint: '/oidc/logout' })).toBeNull()
+    expect(buildEndSessionUrl(cfg, { ...discovery, end_session_endpoint: 'не-url' })).toBeNull()
   })
 })
 
