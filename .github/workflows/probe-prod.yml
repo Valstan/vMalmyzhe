@@ -159,6 +159,26 @@ jobs:
           echo "✅ колонки блокировок на месте для всех коллекций"
           REMOTE
 
+      # Путь «раннер -> ЕСА» и путь «бокс портала -> ЕСА» — разные, и для входа
+      # значим второй: discovery и обмен кода портал делает со своего бокса.
+      # 04.09 проба дважды получила с раннера 302, а на третий раз — пять
+      # таймаутов подряд; понять по этому, доступна ли ЕСА порталу, было нельзя.
+      # Шаг read-only, печатает только код и адрес — оба хоста публичные.
+      - name: Достижимость ЕСА с бокса портала
+        if: always()
+        env:
+          ESA: https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai
+        run: |
+          set -eo pipefail
+          ssh vmalmyzhe 'bash -s' "$ESA" <<'REMOTE'
+          set -eo pipefail
+          ESA="$1"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --retry 4 --retry-delay 5 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 "$ESA/.well-known/openid-configuration" || echo 000)
+          echo "бокс -> ЕСА discovery: HTTP $CODE"
+          [ "$CODE" = "200" ] || { echo "::error::портал не достучался до ЕСА (HTTP $CODE) — вход и выход через ЕСА сейчас не работают"; exit 1; }
+          REMOTE
+
       - name: Признаки claims последнего входа (без значений)
         if: always()
         run: |
