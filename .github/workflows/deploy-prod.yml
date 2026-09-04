@@ -103,10 +103,22 @@ jobs:
           # страницы (контента в CI нет) — рантайм наполнит через ISR/ревалидацию.
           DATABASE_URI: postgresql://postgres:postgres@localhost:5432/vmalmyzhe_build
           PAYLOAD_SECRET: ci-build-only-secret-not-used-at-runtime
-          NEXT_PUBLIC_SERVER_URL: ${{ vars.NEXT_PUBLIC_SERVER_URL || 'http://127.0.0.1:3004' }}
+          # Без дефолта намеренно. Next инлайнит NEXT_PUBLIC_* в бандл НА СБОРКЕ
+          # (и в серверный тоже), поэтому prod-env это значение уже не перебьёт.
+          # Правдоподобный дефолт http://127.0.0.1:3004 стоял здесь и был хуже
+          # пустого: он перебивал штатный безопасный фолбэк web/src/lib/site.ts,
+          # где лежит боевой punycode-домен. При незаданной переменной в прод
+          # уехал бы бандл, где redirect_uri для ЕСА равен
+          # http://127.0.0.1:3004/api/auth/callback, а canonical/robots/sitemap
+          # указывают на localhost — при полностью зелёных build и smoke-check
+          # (тот стучится в локальный порт и такого не видит).
+          NEXT_PUBLIC_SERVER_URL: ${{ vars.NEXT_PUBLIC_SERVER_URL }}
           # Включает output:'standalone' (next.config.js).
           STANDALONE_BUILD: '1'
-        run: pnpm build
+        run: |
+          set -eo pipefail
+          [ -n "$NEXT_PUBLIC_SERVER_URL" ] || { echo "::error::vars.NEXT_PUBLIC_SERVER_URL не задана — значение запекается в бандл на сборке, собирать нельзя"; exit 1; }
+          pnpm build
 
       - name: Assemble standalone bundle
         working-directory: web
@@ -200,15 +212,30 @@ jobs:
           PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
         run: |
           set -eo pipefail
+          # ssh склеивает аргументы в одну строку для удалённого шелла, поэтому
+          # пустой аргумент не доезжает как пустой $1 — он исчезает, и позиционные
+          # параметры на боксе сдвигаются. Проверяем здесь, как это уже сделано
+          # для четырёх SSH-реквизитов в шаге Setup SSH.
+          [ -n "$PROD_ENV_FILE" ] || { echo "::error::secrets.PROD_ENV_FILE не задан — зеркалирование не выполнено"; exit 1; }
           ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
           set -eo pipefail
           ENV_FILE="$1"
           command -v jq >/dev/null || { echo "::warning::jq на боксе нет — зеркалирование пропущено"; exit 0; }
 
+          # Доступность файла проверяем ОДИН раз и громко. Иначе недоступность
+          # prod-env (нет правила sudoers, путь переехал) неотличима от «ключей
+          # нет»: val() вернёт пусто для всех имён, и шаг напечатает
+          # «SECRETS_TOKEN/SECRETS_VAULT_URL в prod-env нет» — ложный диагноз,
+          # который отправляет разбираться не туда. Отсутствие ОТДЕЛЬНОГО ключа —
+          # норма, недоступность самого файла — нет.
+          sudo -n test -r "$ENV_FILE" || { echo "::error::prod-env недоступен (sudo -n или путь) — зеркалирование не выполнено"; exit 1; }
+
           # ⚠️ Отсутствующее имя — норма (не все ключи заведены), поэтому неудачный
           # grep гасится здесь. Без этого `set -eo pipefail` убивает весь скрипт на
           # первом же отсутствующем ключе — и шаг падает молча, ничего не напечатав
           # (поймано живым прогоном 03.09, run 33774054942).
+          # Гашение здесь безопасно ТОЛЬКО потому, что читаемость файла проверена
+          # выше: иначе `|| out=""` накрывал бы и отказ sudo, и неверный путь.
           val() {
             local out
             out=$(sudo -n grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1) || out=""
@@ -256,13 +283,34 @@ jobs:
           esac
 
           # Эхо приёмника: читаем обратно и сверяем отпечаток, не значение.
+          # ⚠️ curl -sf на HTTP>=400 даёт код 22, а под `set -eo pipefail` он
+          # протаскивался через конвейер в присваивание и обрывал ВЕСЬ удалённый
+          # скрипт посреди первой итерации — без единой строки объяснения. Приёмка
+          # при этом не выполнялась вовсе, а в логе оставалось «запись принята»,
+          # которое читается как «сверено». Поэтому отказ ловим явно.
+          bad=0
           for NAME in $NAMES; do
             V=$(val "$NAME"); [ -n "$V" ] || continue
             MINE=$(printf '%s' "$V" | sha256sum | cut -c1-12)
-            THEIRS=$(curl -sf --max-time 15 -H "Authorization: Bearer $TOKEN" "$VAULT?key=$NAME" \
-              | jq -r --arg n "$NAME" '.secrets[$n] // empty' | tr -d '\n' | sha256sum | cut -c1-12)
-            [ "$MINE" = "$THEIRS" ] && echo "$NAME: эхо совпало ($MINE)" || echo "::warning::$NAME: эхо НЕ совпало ($MINE vs $THEIRS)"
+            RESP=$(curl -sf --max-time 15 -H "Authorization: Bearer $TOKEN" "$VAULT?key=$NAME" || true)
+            if [ -z "$RESP" ]; then
+              echo "::warning::$NAME: комната не отдала значение — эхо не сверено"
+              bad=$((bad+1)); continue
+            fi
+            THEIRS=$(printf '%s' "$RESP" | jq -r --arg n "$NAME" '.secrets[$n] // empty' | tr -d '\n' | sha256sum | cut -c1-12)
+            if [ "$MINE" = "$THEIRS" ]; then
+              echo "$NAME: эхо совпало ($MINE)"
+            else
+              echo "::warning::$NAME: эхо НЕ совпало ($MINE vs $THEIRS)"
+              bad=$((bad+1))
+            fi
           done
+          # Результат сравнения обязан куда-то идти. Раньше обе ветки кончались
+          # успешным echo, шаг был зелёным при любом исходе — то есть приёмка
+          # DR-копии печатала, но не могла провалиться. Шаг стоит под
+          # continue-on-error, поэтому красный здесь виден и не рвёт деплой.
+          [ "$bad" -eq 0 ] || { echo "::error::эхо не сошлось по $bad ключам — DR-копия секретов в комнате не подтверждена"; exit 1; }
+          echo "эхо сошлось по всем зеркалируемым ключам"
           REMOTE
 
       - name: Smoke check — local routes (/, /news, /admin)
