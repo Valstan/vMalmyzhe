@@ -69,35 +69,73 @@ jobs:
         env:
           PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
         run: |
-          set -e
+          set -eo pipefail
           ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
-          set -e
+          set -eo pipefail
           ENV_FILE="$1"
-          DB=$(sudo -n grep '^DATABASE_URI=' "$ENV_FILE" | head -1 | sed 's/^DATABASE_URI=//;s/^"//;s/"$//')
+          # Идиома чтения prod-env — общая с probe-prod.yml и apply-vault-config.yml
+          # (8df10a4): неудачный grep гасим явно, значение режем по первому «=»,
+          # кавычки снимаем ТОЛЬКО парные. Этот файл единственный её не получил.
+          DB=$(sudo -n grep '^DATABASE_URI=' "$ENV_FILE" 2>/dev/null | head -1 || true)
+          DB=$(printf '%s' "${DB#*=}" | sed 's/^"\(.*\)"$/\1/')
+          # Гард обязателен: статус конвейера берётся у хвоста, поэтому ни отказ
+          # `sudo -n`, ни отсутствие ключа, ни неверный путь сами по себе шаг не
+          # валят. Пустой DB не был бы ошибкой и для psql: пустое имя базы libpq
+          # заменяет на имя пользователя и идёт в локальный сокет — то есть
+          # разрушающий шаг ниже уехал бы в чужую базу.
+          [ -n "$DB" ] || { echo "::error::DATABASE_URI не прочитан из prod-env (нет ключа, отказ sudo -n или неверный путь)"; exit 1; }
           echo "ssh: ok (hostname в публичный лог CI не печатаем — D-038)"
-          echo "payload_migrations table: $(psql "$DB" -tAc "SELECT to_regclass('public.payload_migrations');")"
+          # Через переменную, а не внутри echo: статус $( ), подставленной
+          # аргументом команды, отбрасывается, и preflight не мог упасть НИ ПРИ
+          # КАКОМ отказе psql — единственный предполётный контроль перед
+          # разрушающим шагом был декоративным.
+          REG=$(psql "$DB" -tAc "SELECT coalesce(to_regclass('public.payload_migrations')::text, '<реестра нет>')")
+          echo "payload_migrations: $REG"
           REMOTE
 
       - name: Apply migration
         env:
           PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+          # Через env, а не через ${{ }} прямо в теле run: подстановка выражения
+          # склеивается в командную строку до шелла, и имя миграции с кавычкой
+          # или пробелом стало бы кодом (D-046 про то же — текст не сочиняется
+          # внутри команды).
+          MIGRATION: ${{ inputs.migration }}
         run: |
-          set -e
-          SQL="web/src/migrations/${{ inputs.migration }}.sql"
+          set -eo pipefail
+          case "$MIGRATION" in
+            *[!A-Za-z0-9_-]*|'') echo "::error::Имя миграции может состоять только из букв, цифр, дефиса и подчёркивания"; exit 1 ;;
+          esac
+          SQL="web/src/migrations/$MIGRATION.sql"
           test -f "$SQL" || { echo "::error::Нет файла $SQL"; exit 1; }
           scp -q "$SQL" vmalmyzhe:/tmp/mig.sql
-          ssh vmalmyzhe 'bash -s' "${{ inputs.migration }}" "$PROD_ENV_FILE" <<'REMOTE'
-          set -e
+          ssh vmalmyzhe 'bash -s' "$MIGRATION" "$PROD_ENV_FILE" <<'REMOTE'
+          set -eo pipefail
           NAME="$1"
           ENV_FILE="$2"
-          DB=$(sudo -n grep '^DATABASE_URI=' "$ENV_FILE" | head -1 | sed 's/^DATABASE_URI=//;s/^"//;s/"$//')
+          DB=$(sudo -n grep '^DATABASE_URI=' "$ENV_FILE" 2>/dev/null | head -1 || true)
+          DB=$(printf '%s' "${DB#*=}" | sed 's/^"\(.*\)"$/\1/')
+          [ -n "$DB" ] || { echo "::error::DATABASE_URI не прочитан из prod-env — миграция НЕ применена"; exit 1; }
           echo "Применяю $NAME ..."
           psql "$DB" -v ON_ERROR_STOP=1 -f /tmp/mig.sql
-          # запись в реестр — best-effort и идемпотентно.
-          psql "$DB" -c "INSERT INTO payload_migrations (name, batch) SELECT '$NAME', (SELECT COALESCE(MAX(batch),0)+1 FROM payload_migrations) WHERE NOT EXISTS (SELECT 1 FROM payload_migrations WHERE name='$NAME');" \
-            && echo "записано в payload_migrations" || echo "payload_migrations нет — запись пропущена (колонка применена)"
           rm -f /tmp/mig.sql
-          echo "verify: записей '$NAME' в payload_migrations (>=1 = в реестре; 0 — реестра ещё нет):"
-          psql "$DB" -tAc "SELECT count(*) FROM payload_migrations WHERE name = '$NAME';" 2>/dev/null \
-            || echo "0 (payload_migrations недоступна — колонка применена, реестр досоздаст payload migrate)"
+          # Запись в реестр остаётся best-effort, но причину больше не выдумываем:
+          # раньше любой отказ — нет прав на INSERT, обрыв, переполнение диска —
+          # печатался как «payload_migrations нет», то есть шаг утверждал
+          # конкретную безобидную причину, которой могло не быть.
+          if OUT=$(psql "$DB" -c "INSERT INTO payload_migrations (name, batch) SELECT '$NAME', (SELECT COALESCE(MAX(batch),0)+1 FROM payload_migrations) WHERE NOT EXISTS (SELECT 1 FROM payload_migrations WHERE name='$NAME');" 2>&1); then
+            echo "реестр: $OUT"
+          else
+            echo "::warning::реестр не обновлён, миграция при этом ПРИМЕНЕНА: $OUT"
+          fi
+          # Приёмка. «Реестр недоступен» и «записей 0» — разные исходы; раньше оба
+          # печатались как «0», причём с готовым объяснением про применённую колонку.
+          if CNT=$(psql "$DB" -tAc "SELECT count(*) FROM payload_migrations WHERE name = '$NAME';" 2>&1); then
+            echo "verify: записей '$NAME' в реестре: $CNT"
+            case "$CNT" in
+              0) echo "::warning::в реестре записи нет — штатный payload migrate прогонит $NAME повторно" ;;
+            esac
+          else
+            echo "::warning::verify не выполнен, реестр недоступен: $CNT"
+          fi
           REMOTE
