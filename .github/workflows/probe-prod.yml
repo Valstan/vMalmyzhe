@@ -158,6 +158,15 @@ jobs:
           # ни адреса, ни имени. Отвечает на вопрос brain 04.09 «доехал ли email».
           ssh vmalmyzhe 'sudo bash -s' <<'REMOTE'
           echo "== последние строки claims из журнала портала =="
-          journalctl -u vmalmyzhe -n 2000 --no-pager -o cat 2>/dev/null \
-            | grep -F '[auth/callback] claims:' | tail -5 || echo "входов с этой сборкой ещё не было"
+          # Статус конвейера — у последней команды (`tail`, всегда 0), поэтому
+          # `|| echo` после него не срабатывает никогда: пустой вывод читался бы
+          # как «проверил, пусто». Забираем результат в переменную и говорим
+          # словами, чего именно нет.
+          LINES=$(journalctl -u vmalmyzhe -n 2000 --no-pager -o cat 2>/dev/null \
+            | grep -F '[auth/callback] claims:' | tail -5 || true)
+          if [ -n "$LINES" ]; then
+            printf '%s\n' "$LINES"
+          else
+            echo "строк claims в журнале нет — входов на этой сборке ещё не было"
+          fi
           REMOTE
