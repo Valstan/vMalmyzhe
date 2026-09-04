@@ -4,7 +4,7 @@ import { getPayload } from 'payload'
 import { notFound } from 'next/navigation'
 
 import { SITE_NAME } from '../../../lib/site'
-import { withRetry } from '../../../lib/withRetry'
+import { degraded, withRetry } from '../../../lib/withRetry'
 import { RichText } from '../../../lib/RichText'
 
 type PageDoc = {
@@ -30,8 +30,8 @@ export async function pageMeta(slug: string): Promise<Metadata> {
     const page = await getPage(slug)
     if (!page) return {}
     return { title: page.title || SITE_NAME }
-  } catch {
-    return {}
+  } catch (err) {
+    return degraded('PageView/pageMeta', {}, err)
   }
 }
 

@@ -8,7 +8,7 @@ import { notFound } from 'next/navigation'
 
 import { jsonLdHtml } from '../../../lib/jsonLd'
 import { SITE_NAME, SITE_URL } from '../../../lib/site'
-import { withRetry } from '../../../lib/withRetry'
+import { degraded, withRetry } from '../../../lib/withRetry'
 import { RichText } from '../../../lib/RichText'
 import { PostGallery } from '../components/PostGallery'
 import { formatPostDate } from '../../../lib/format'
@@ -88,8 +88,8 @@ export async function postMeta(slug: string): Promise<Metadata> {
         images: cover?.url ? [{ url: cover.url }] : undefined,
       },
     }
-  } catch {
-    return {}
+  } catch (err) {
+    return degraded('PostView/postMeta', {}, err)
   }
 }
 

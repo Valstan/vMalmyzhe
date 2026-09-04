@@ -5,7 +5,7 @@ import React from 'react'
 
 import './globals.css'
 import { SITE_DESC, SITE_NAME, SITE_URL } from '../../lib/site'
-import { withRetry } from '../../lib/withRetry'
+import { degraded, withRetry } from '../../lib/withRetry'
 import type { ChromeContent, NavItem } from './components/SiteChrome'
 import { SiteChrome } from './components/SiteChrome'
 import { SiteJsonLd } from './components/SiteJsonLd'
@@ -52,8 +52,8 @@ async function getChrome(): Promise<ChromeContent> {
         contacts: (footer?.contacts as string | null) ?? null,
       }
     })
-  } catch {
-    return null
+  } catch (err) {
+    return degraded('layout/getChrome', null, err)
   }
 }
 

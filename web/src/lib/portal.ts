@@ -1,7 +1,7 @@
 import config from '@payload-config'
 import { getPayload, type Where } from 'payload'
 
-import { withRetry } from './withRetry'
+import { degraded, withRetry } from './withRetry'
 
 // Данные портала (M1): рубрики, активные баннеры, выборки постов.
 // Все функции мягко деградируют ([]/null) — сбой одной секции не роняет страницу
@@ -59,8 +59,8 @@ export async function getSections(): Promise<SectionDoc[]> {
       })
       return res.docs as SectionDoc[]
     })
-  } catch {
-    return []
+  } catch (err) {
+    return degraded('portal/getSections', [], err)
   }
 }
 
@@ -76,8 +76,8 @@ export async function getSectionBySlug(slug: string): Promise<SectionDoc | null>
       })
       return (res.docs[0] as SectionDoc | undefined) ?? null
     })
-  } catch {
-    return null
+  } catch (err) {
+    return degraded('portal/getSectionBySlug', null, err)
   }
 }
 
@@ -103,8 +103,8 @@ export async function getBanners(zone: 'header' | 'sidebar' | 'feed'): Promise<B
       })
       return res.docs as BannerDoc[]
     })
-  } catch {
-    return []
+  } catch (err) {
+    return degraded('portal/getBanners', [], err)
   }
 }
 
@@ -139,7 +139,7 @@ export async function findPosts({
         totalDocs: res.totalDocs,
       }
     })
-  } catch {
-    return { docs: [], totalPages: 0, totalDocs: 0 }
+  } catch (err) {
+    return degraded('portal/findPosts', { docs: [], totalPages: 0, totalDocs: 0 }, err)
   }
 }
