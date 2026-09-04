@@ -1,0 +1,163 @@
+name: Probe prod (read-only)
+
+# Диагностика прода, которая ничего не меняет. Два независимых класса проверок:
+#
+# 1. Выход через ЕСА (мандат brain 04.09). Проверяет, что в discovery ЕСА есть
+#    end_session_endpoint и что он возвращает 302 на наш origin с теми же
+#    параметрами, которые кладёт код (web/src/lib/auth/oidc.ts::buildEndSessionUrl).
+#    SSH не нужен — оба хоста публичные.
+#
+# 2. Дрейф схемы прода от конфига, класс G231 (письмо brain 04.09, рецидив у
+#    РМЗ-сайта: админка лежала сутки). Payload держит в служебной
+#    `payload_locked_documents_rels` по колонке `<коллекция>_id` на КАЖДУЮ
+#    коллекцию и берёт блокировку при открытии любого документа: пропущенная
+#    колонка кладёт редактирование целиком, а миграция при этом применяется
+#    чисто. Гейты этот класс не видят — список таблиц не меняется. Проверка
+#    read-only: список коллекций из кода против колонок в живой БД.
+#
+# Гигиена публичного лога (D-038): печатаем только имена коллекций/колонок,
+# HTTP-коды и публичные домены. Ни хостнеймов боксов, ни путей, ни имён
+# пользователей, ни строки подключения.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Понедельник 06:00 UTC — дрейф ловится до рабочей недели редакции.
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: vmalmyzhe-probe-prod
+  cancel-in-progress: false
+
+jobs:
+  esa-logout:
+    name: Выход через ЕСА (end_session)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Публичные реквизиты витрины и ЕСА — не инфра-детали (D-038).
+      # Те же значения, что дефолты в web/src/lib/auth/esa.ts.
+      ESA: https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai
+      PORTAL: https://xn--80adkdyec4j.xn--p1ai
+      CLIENT_ID: portal
+    steps:
+      - name: discovery — есть ли end_session_endpoint
+        run: |
+          set -eo pipefail
+          curl -sS --max-time 20 "$ESA/.well-known/openid-configuration" -o disc.json
+          END=$(jq -r '.end_session_endpoint // ""' disc.json)
+          echo "end_session_endpoint: ${END:-(нет в документе)}"
+          [ -n "$END" ] || { echo "::error::в discovery ЕСА нет end_session_endpoint — наш выход деградирует до локального"; exit 1; }
+          case "$END" in
+            "$ESA"/*) echo "origin совпадает с issuer — гард buildEndSessionUrl пропустит" ;;
+            *) echo "::error::end_session_endpoint вне origin issuer'а ($END) — код отбросит его как открытый редиректор"; exit 1 ;;
+          esac
+          echo "END=$END" >> "$GITHUB_ENV"
+
+      - name: end_session — возвращает ли 302 на наш origin
+        run: |
+          set -eo pipefail
+          # Ровно та строка, которую собирает buildEndSessionUrl: client_id +
+          # post_logout_redirect_uri в origin нашего зарегистрированного redirect_uri.
+          OUT=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 \
+            "$END?client_id=$CLIENT_ID&post_logout_redirect_uri=$PORTAL/")
+          echo "curl → $OUT"
+          CODE=${OUT%% *}
+          LOC=${OUT#* }
+          [ "$CODE" = "302" ] || { echo "::error::ожидали 302, пришло $CODE"; exit 1; }
+          case "$LOC" in
+            "$PORTAL"/*) echo "✅ ЕСА возвращает на наш origin — post_logout_redirect_uri в зоне клиента" ;;
+            *) echo "::error::вернулось на $LOC вместо $PORTAL/ — origin не признан зоной клиента portal, писать Сарафану"; exit 1 ;;
+          esac
+
+  schema-drift:
+    name: Дрейф схемы (G231) и признаки claims
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ] || [ -z "$DEPLOY_SSH_USER" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / secrets.DEPLOY_SSH_USER"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_vmalmyzhe
+          chmod 600 ~/.ssh/id_ed25519_vmalmyzhe
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host vmalmyzhe
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User $DEPLOY_SSH_USER
+            IdentityFile ~/.ssh/id_ed25519_vmalmyzhe
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Колонки блокировок под каждую коллекцию
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+        run: |
+          set -eo pipefail
+          # Список коллекций снимается с кода, а не пишется руками: добавили
+          # коллекцию — проба узнает о ней сама.
+          grep -hoE "^  slug: '[a-z0-9_-]+'," web/src/collections/*.ts \
+            | grep -oE "'[a-z0-9_-]+'" | tr -d "'" | sort -u > slugs.txt
+          echo "коллекции в конфиге ($(wc -l < slugs.txt)): $(tr '\n' ' ' < slugs.txt)"
+          [ -s slugs.txt ] || { echo "::error::не удалось прочитать список коллекций из web/src/collections"; exit 1; }
+          scp -q slugs.txt vmalmyzhe:/tmp/vm-slugs.txt
+          ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
+          set -eo pipefail
+          ENV_FILE="$1"
+          # Неудачный grep гасим явно: под `set -e` внутри $( ) он убил бы
+          # скрипт до понятного сообщения (G303).
+          DB=$(sudo -n grep '^DATABASE_URI=' "$ENV_FILE" 2>/dev/null | head -1 || true)
+          DB=$(printf '%s' "${DB#*=}" | sed 's/^"\(.*\)"$/\1/')
+          [ -n "$DB" ] || { echo "::error::DATABASE_URI в prod-env не найден"; exit 1; }
+          COLS=$(psql "$DB" -tAc "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='payload_locked_documents_rels'")
+          [ -n "$COLS" ] || { echo "::error::таблицы payload_locked_documents_rels нет — админка не откроет ни один документ"; exit 1; }
+          MISS=""
+          N=0
+          HIT=0
+          while read -r s; do
+            [ -n "$s" ] || continue
+            N=$((N + 1))
+            if printf '%s\n' "$COLS" | grep -qx "${s}_id"; then
+              HIT=$((HIT + 1))
+            else
+              MISS="$MISS ${s}_id"
+            fi
+          done < /tmp/vm-slugs.txt
+          rm -f /tmp/vm-slugs.txt
+          # Считаем только колонки под коллекции: parent_id — служебная, к
+          # коллекциям отношения не имеет и в счёт не идёт.
+          echo "колонок под коллекции: $HIT, коллекций в конфиге: $N"
+          if [ -n "$MISS" ]; then
+            echo "::error::в payload_locked_documents_rels нет колонок:$MISS — админка не сможет открыть ни один документ (G231)"
+            exit 1
+          fi
+          echo "✅ колонки блокировок на месте для всех коллекций"
+          REMOTE
+
+      - name: Признаки claims последнего входа (без значений)
+        if: always()
+        run: |
+          set -eo pipefail
+          # Строку пишет web/src/app/api/auth/callback/route.ts: только «есть/нет»,
+          # ни адреса, ни имени. Отвечает на вопрос brain 04.09 «доехал ли email».
+          ssh vmalmyzhe 'sudo bash -s' <<'REMOTE'
+          echo "== последние строки claims из журнала портала =="
+          journalctl -u vmalmyzhe -n 2000 --no-pager -o cat 2>/dev/null \
+            | grep -F '[auth/callback] claims:' | tail -5 || echo "входов с этой сборкой ещё не было"
+          REMOTE

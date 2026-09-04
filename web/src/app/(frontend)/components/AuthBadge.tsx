@@ -43,8 +43,12 @@ export function AuthBadge() {
           <span className="auth-badge__name" title={me.user.email ?? undefined}>
             {me.user.name}
           </span>
+          {/* Кнопка гасит не только портал: сессия ЕСА — одна на весь
+              вмалмыже.рф (D-072), и после мандата brain 04.09 выход уводит из
+              всех сервисов сразу. Подпись обязана это говорить — иначе житель
+              нажимает «Выйти» и молча выходит из ПОЗВОНИ и остальных. */}
           <button type="submit" className="auth-badge__logout">
-            Выйти
+            Выйти из всех сервисов
           </button>
         </form>
       ) : (

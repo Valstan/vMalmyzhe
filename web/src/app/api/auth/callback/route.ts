@@ -50,6 +50,15 @@ export const GET = async (req: NextRequest): Promise<Response> => {
     const { idToken } = await exchangeCode(env.cfg, discovery, code, tx.verifier)
     const claims = await verifyIdToken(env.cfg, discovery, idToken, tx.nonce)
 
+    // Доехал ли scope email живым кругом — вопрос brain 04.09 (Сарафан его
+    // живым входом не гонял). Пишем ТОЛЬКО факт наличия: ни адреса, ни имени в
+    // журнал не попадает. Без этой строки «email пуст» неотличимо от
+    // «email пришёл неподтверждённым» — sessionFromClaims гасит оба в null.
+    console.log(
+      `[auth/callback] claims: email=${claims.email ? 'есть' : 'нет'}` +
+        ` email_verified=${claims.emailVerified} name=${claims.name ? 'есть' : 'нет'}`,
+    )
+
     const session = sessionFromClaims(claims, Math.floor(Date.now() / 1000))
     const res = NextResponse.redirect(new URL(tx.next ?? '/', env.serverUrl), 302)
     clearTxCookie(res)
