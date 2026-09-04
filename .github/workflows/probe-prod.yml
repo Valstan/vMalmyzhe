@@ -44,7 +44,14 @@ jobs:
       - name: discovery — есть ли end_session_endpoint
         run: |
           set -eo pipefail
-          curl -sS --max-time 20 "$ESA/.well-known/openid-configuration" -o disc.json
+          # Ретраи, а не один выстрел: 04.09 первый прогон дал 302, второй —
+          # curl(28) на том же адресе. Еженедельная проба, которая краснеет от
+          # разовой сетевой заминки, перестаёт читаться — а тогда она не поймает
+          # и настоящий дрейф.
+          curl -sS --retry 4 --retry-delay 5 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 \
+            "$ESA/.well-known/openid-configuration" -o disc.json \
+            || { echo "::error::ЕСА не ответила на discovery за 5 попыток — либо она лежит, либо сеть; наш выход при этом деградирует до локального, портал цел"; exit 1; }
           END=$(jq -r '.end_session_endpoint // ""' disc.json)
           echo "end_session_endpoint: ${END:-(нет в документе)}"
           [ -n "$END" ] || { echo "::error::в discovery ЕСА нет end_session_endpoint — наш выход деградирует до локального"; exit 1; }
@@ -59,7 +66,9 @@ jobs:
           set -eo pipefail
           # Ровно та строка, которую собирает buildEndSessionUrl: client_id +
           # post_logout_redirect_uri в origin нашего зарегистрированного redirect_uri.
-          OUT=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 \
+          OUT=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' \
+            --retry 4 --retry-delay 5 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 \
             "$END?client_id=$CLIENT_ID&post_logout_redirect_uri=$PORTAL/")
           echo "curl → $OUT"
           CODE=${OUT%% *}
