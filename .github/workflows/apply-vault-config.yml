@@ -118,7 +118,19 @@ jobs:
             echo "SECRETS_VAULT_URL дописан"
           fi
 
-          sudo systemctl restart vmalmyzhe
+          # `sudo` без -n здесь был единственным в файле: без tty он ушёл бы
+          # читать пароль из того же stdin и съел остаток скрипта.
+          sudo -n systemctl restart vmalmyzhe
           sleep 6
-          echo "после применения /api/auth/me: $(curl -s --max-time 10 http://127.0.0.1:3004/api/auth/me || echo '(нет ответа)')"
+          # Приёмка обязана уметь провалиться. Раньше здесь стоял голый echo с
+          # $( ) внутри: статус подстановки отбрасывается, `curl -s` без -f
+          # возвращает 0 и на HTTP 500, а `|| echo '(нет ответа)'` гасил и отказ
+          # соединения. То есть портал мог не подняться после правки prod-env, а
+          # workflow заканчивался ЗЕЛЁНЫМ — и это единственная проверка после
+          # того, как мы поменяли окружение и перезапустили сервис.
+          sudo -n systemctl is-active --quiet vmalmyzhe || { echo "::error::сервис не активен после перезапуска — prod-env изменён, откатывать вручную"; exit 1; }
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:3004/api/auth/me || echo 000)
+          BODY=$(curl -s --max-time 10 http://127.0.0.1:3004/api/auth/me || true)
+          echo "после применения /api/auth/me: HTTP $CODE $BODY"
+          [ "$CODE" = "200" ] || { echo "::error::портал не отвечает 200 после перезапуска (HTTP $CODE)"; exit 1; }
           REMOTE
