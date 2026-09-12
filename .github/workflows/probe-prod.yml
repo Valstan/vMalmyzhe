@@ -113,6 +113,18 @@ jobs:
             ServerAliveInterval 30
           CFG
           chmod 600 ~/.ssh/config
+          # G315: ssh/scp при отказе связи печатают хост и порт отдельными словами,
+          # маскировка секретов их не ловит, а репо публичный. Обёртка глушит
+          # stderr клиента; удалённый скрипт печатает диагностику в stdout
+          # (exec 2>&1 первой строкой), код 255 объясняем словами.
+          cat > ~/.ssh/quiet <<'SH'
+          #!/usr/bin/env bash
+          "$@" 2>/dev/null
+          rc=$?
+          [ "$rc" = 255 ] && echo "::error::$1 не соединился с боксом (код 255); хост и порт не печатаем"
+          exit "$rc"
+          SH
+          chmod 700 ~/.ssh/quiet
 
       - name: Колонки блокировок под каждую коллекцию
         env:
@@ -125,8 +137,12 @@ jobs:
             | grep -oE "'[a-z0-9_-]+'" | tr -d "'" | sort -u > slugs.txt
           echo "коллекции в конфиге ($(wc -l < slugs.txt)): $(tr '\n' ' ' < slugs.txt)"
           [ -s slugs.txt ] || { echo "::error::не удалось прочитать список коллекций из web/src/collections"; exit 1; }
-          scp -q slugs.txt vmalmyzhe:/tmp/vm-slugs.txt
-          ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
+          ~/.ssh/quiet scp -q slugs.txt vmalmyzhe:/tmp/vm-slugs.txt
+          # G321: ssh склеивает аргументы в строку — пустой исчезает и сдвигает
+          # позиционные параметры на боксе. Пустой аргумент — стоп до ssh.
+          [ -n "$PROD_ENV_FILE" ] || { echo "::error::PROD_ENV_FILE пуст — на бокс не идём"; exit 1; }
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
+          exec 2>&1
           set -eo pipefail
           ENV_FILE="$1"
           # Неудачный grep гасим явно: под `set -e` внутри $( ) он убил бы
@@ -170,7 +186,11 @@ jobs:
           ESA: https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai
         run: |
           set -eo pipefail
-          ssh vmalmyzhe 'bash -s' "$ESA" <<'REMOTE'
+          # G321: ssh склеивает аргументы в строку — пустой исчезает и сдвигает
+          # позиционные параметры на боксе. Пустой аргумент — стоп до ssh.
+          [ -n "$ESA" ] || { echo "::error::ESA пуст — на бокс не идём"; exit 1; }
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$ESA" <<'REMOTE'
+          exec 2>&1
           set -eo pipefail
           ESA="$1"
           CODE=$(curl -s -o /dev/null -w '%{http_code}' --retry 4 --retry-delay 5 --retry-all-errors \
@@ -185,7 +205,8 @@ jobs:
           set -eo pipefail
           # Строку пишет web/src/app/api/auth/callback/route.ts: только «есть/нет»,
           # ни адреса, ни имени. Отвечает на вопрос brain 04.09 «доехал ли email».
-          ssh vmalmyzhe 'sudo bash -s' <<'REMOTE'
+          ~/.ssh/quiet ssh vmalmyzhe 'sudo bash -s' <<'REMOTE'
+          exec 2>&1
           echo "== последние строки claims из журнала портала =="
           # Статус конвейера — у последней команды (`tail`, всегда 0), поэтому
           # `|| echo` после него не срабатывает никогда: пустой вывод читался бы

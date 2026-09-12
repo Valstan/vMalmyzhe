@@ -64,6 +64,18 @@ jobs:
             ServerAliveInterval 30
           CFG
           chmod 600 ~/.ssh/config
+          # G315: ssh/scp при отказе связи печатают хост и порт отдельными словами,
+          # маскировка секретов их не ловит, а репо публичный. Обёртка глушит
+          # stderr клиента; удалённый скрипт печатает диагностику в stdout
+          # (exec 2>&1 первой строкой), код 255 объясняем словами.
+          cat > ~/.ssh/quiet <<'SH'
+          #!/usr/bin/env bash
+          "$@" 2>/dev/null
+          rc=$?
+          [ "$rc" = 255 ] && echo "::error::$1 не соединился с боксом (код 255); хост и порт не печатаем"
+          exit "$rc"
+          SH
+          chmod 700 ~/.ssh/quiet
 
       - name: Состояние и проба комнаты (с бокса, без значений)
         env:
@@ -72,7 +84,13 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           set -eo pipefail
-          ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" "$VAULT_BASE" "$MODE" <<'REMOTE'
+          # G321: ssh склеивает аргументы в строку — пустой исчезает и сдвигает
+          # позиционные параметры на боксе. Пустой аргумент — стоп до ssh.
+          [ -n "$PROD_ENV_FILE" ] || { echo "::error::PROD_ENV_FILE пуст — на бокс не идём"; exit 1; }
+          [ -n "$VAULT_BASE" ] || { echo "::error::VAULT_BASE пуст — на бокс не идём"; exit 1; }
+          [ -n "$MODE" ] || { echo "::error::MODE пуст — на бокс не идём"; exit 1; }
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" "$VAULT_BASE" "$MODE" <<'REMOTE'
+          exec 2>&1
           set -eo pipefail
           ENV_FILE="$1"; VAULT_BASE="$2"; MODE="$3"
           NAME=ESA_CLIENT_SECRET_PORTAL

@@ -64,13 +64,29 @@ jobs:
             ServerAliveInterval 30
           CFG
           chmod 600 ~/.ssh/config
+          # G315: ssh/scp при отказе связи печатают хост и порт отдельными словами,
+          # маскировка секретов их не ловит, а репо публичный. Обёртка глушит
+          # stderr клиента; удалённый скрипт печатает диагностику в stdout
+          # (exec 2>&1 первой строкой), код 255 объясняем словами.
+          cat > ~/.ssh/quiet <<'SH'
+          #!/usr/bin/env bash
+          "$@" 2>/dev/null
+          rc=$?
+          [ "$rc" = 255 ] && echo "::error::$1 не соединился с боксом (код 255); хост и порт не печатаем"
+          exit "$rc"
+          SH
+          chmod 700 ~/.ssh/quiet
 
       - name: Preflight (read-only)
         env:
           PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
         run: |
           set -eo pipefail
-          ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
+          # G321: ssh склеивает аргументы в строку — пустой исчезает и сдвигает
+          # позиционные параметры на боксе. Пустой аргумент — стоп до ssh.
+          [ -n "$PROD_ENV_FILE" ] || { echo "::error::PROD_ENV_FILE пуст — на бокс не идём"; exit 1; }
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
+          exec 2>&1
           set -eo pipefail
           ENV_FILE="$1"
           # Идиома чтения prod-env — общая с probe-prod.yml и apply-vault-config.yml
@@ -108,8 +124,13 @@ jobs:
           esac
           SQL="web/src/migrations/$MIGRATION.sql"
           test -f "$SQL" || { echo "::error::Нет файла $SQL"; exit 1; }
-          scp -q "$SQL" vmalmyzhe:/tmp/mig.sql
-          ssh vmalmyzhe 'bash -s' "$MIGRATION" "$PROD_ENV_FILE" <<'REMOTE'
+          ~/.ssh/quiet scp -q "$SQL" vmalmyzhe:/tmp/mig.sql
+          # G321: ssh склеивает аргументы в строку — пустой исчезает и сдвигает
+          # позиционные параметры на боксе. Пустой аргумент — стоп до ssh.
+          [ -n "$MIGRATION" ] || { echo "::error::MIGRATION пуст — на бокс не идём"; exit 1; }
+          [ -n "$PROD_ENV_FILE" ] || { echo "::error::PROD_ENV_FILE пуст — на бокс не идём"; exit 1; }
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$MIGRATION" "$PROD_ENV_FILE" <<'REMOTE'
+          exec 2>&1
           set -eo pipefail
           NAME="$1"
           ENV_FILE="$2"
