@@ -1,0 +1,134 @@
+name: Grant publish key to Sarafan
+
+# Выдача Сарафану права ПУБЛИКОВАТЬ (не только доставлять) — решение
+# владельца 2026-09-12: 379 черновиков конвейера месяц никто не публиковал,
+# классификатор на глаз попадает в рубрику, пусть публикует сам.
+#
+# Механика — двусторонний grant КАРМАНа (D-061): мы предлагаем СВОЙ ключ
+# INGEST_PUBLISH_KEY из своей комнаты пишущим токеном, Сарафан принимает
+# своим токеном по allowlist имён (scripts/accept_secret_grants.py у него).
+# До принятия имя у получателя не занято, значение он не видит.
+#
+# Имя у получателя — VMALMYZHE_PUBLISH_KEY: конвенция <SITE>_INGEST_KEY,
+# которую задал КАРМАН, продолжена для второго ключа того же сайта.
+#
+# Запуск кнопкой, повторный запуск безопасен: 409 «уже принято» — не ошибка,
+# а состояние. Значений ключей и токена шаг не печатает.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'propose — предложить grant; status — только показать выданное/полученное; revoke — отозвать по id'
+        required: true
+        default: 'status'
+        type: choice
+        options: [status, propose, revoke]
+      grant_id:
+        description: 'id выдачи для revoke'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  grant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          set -e
+          [ -n "$SSH_PRIVATE_KEY" ] && [ -n "$DEPLOY_SSH_HOST" ] && [ -n "$DEPLOY_SSH_PORT" ] && [ -n "$DEPLOY_SSH_USER" ] \
+            || { echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / secrets.DEPLOY_SSH_USER"; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_vmalmyzhe
+          chmod 600 ~/.ssh/id_ed25519_vmalmyzhe
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host vmalmyzhe
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User $DEPLOY_SSH_USER
+            IdentityFile ~/.ssh/id_ed25519_vmalmyzhe
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+          # G315: ssh/scp при отказе связи печатают хост и порт отдельными словами,
+          # маскировка секретов их не ловит, а репо публичный. Обёртка глушит
+          # stderr клиента; удалённый скрипт печатает диагностику в stdout
+          # (exec 2>&1 первой строкой), код 255 объясняем словами.
+          cat > ~/.ssh/quiet <<'SH'
+          #!/usr/bin/env bash
+          "$@" 2>/dev/null
+          rc=$?
+          [ "$rc" = 255 ] && echo "::error::$1 не соединился с боксом (код 255); хост и порт не печатаем"
+          exit "$rc"
+          SH
+          chmod 700 ~/.ssh/quiet
+
+      - name: Grant (с бокса, токеном своей комнаты, без значений)
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+          MODE: ${{ inputs.mode }}
+          GRANT_ID: ${{ inputs.grant_id }}
+        run: |
+          set -eo pipefail
+          # G321: ssh склеивает аргументы в строку — пустой исчезает и сдвигает
+          # позиционные параметры на боксе. Пустой аргумент — стоп до ssh.
+          [ -n "$PROD_ENV_FILE" ] || { echo "::error::PROD_ENV_FILE пуст — на бокс не идём"; exit 1; }
+          [ -n "$MODE" ] || { echo "::error::MODE пуст — на бокс не идём"; exit 1; }
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" "$MODE" "${GRANT_ID:-0}" <<'REMOTE'
+          exec 2>&1
+          set -eo pipefail
+          ENV_FILE="$1"; MODE="$2"; GRANT_ID="$3"
+          KEY=INGEST_PUBLISH_KEY
+          TARGET=setka
+          ALIAS=VMALMYZHE_PUBLISH_KEY
+
+          val() { local out; out=$(sudo -n grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1) || out=""; out="${out#*=}"; printf '%s' "$out" | sed 's/^"\(.*\)"$/\1/'; }
+          TOKEN=$(val SECRETS_TOKEN); VAULT=$(val SECRETS_VAULT_URL)
+          [ -n "$TOKEN" ] || { echo "::error::SECRETS_TOKEN в prod-env нет"; exit 1; }
+          [ -n "$VAULT" ] || { echo "::error::SECRETS_VAULT_URL в prod-env нет (apply-vault-config.yml)"; exit 1; }
+          [ -n "$(val $KEY)" ] || { echo "::error::$KEY в prod-env нет — предлагать нечего"; exit 1; }
+          VAULT="${VAULT%/}"
+
+          show() {
+            # Список выдач без значений: id, имя, кому/от кого, состояние.
+            curl -sf --max-time 15 -H "Authorization: Bearer $TOKEN" "$VAULT/api/secrets/grants" \
+              | jq -r '"issued:", (.issued[]? | "  #\(.id) \(.sourceKey) -> \(.targetSlug) as \(.aliasKey // .sourceKey) [\(.state)]"),
+                       "received:", (.received[]? | "  #\(.id) \(.aliasKey) <- \(.sourceSlug) [\(.state)]")'
+          }
+
+          case "$MODE" in
+            status) show ;;
+            propose)
+              BODY=$(jq -n --arg k "$KEY" --arg t "$TARGET" --arg a "$ALIAS" \
+                --arg n "решение владельца 2026-09-12: автопубликация конвейера; письмо vMalmyzhe→brain 2026-09-12-publish-key" \
+                '{key:$k,target_slug:$t,alias:$a,note:$n}')
+              code=$(curl -s -o /tmp/grant.json -w '%{http_code}' --max-time 15 -X POST "$VAULT/api/secrets/grants" \
+                -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data-binary "$BODY" || echo 000)
+              case "$code" in
+                201) echo "предложено: $(jq -c '{id,state}' /tmp/grant.json)" ;;
+                409) echo "409 — имя $ALIAS у $TARGET уже занято или выдача уже есть; см. status ниже" ;;
+                403) echo "::error::403 — токен комнаты только для чтения, grant требует пишущий"; exit 1 ;;
+                404) echo "::error::404 — комната-получатель '$TARGET' не найдена"; exit 1 ;;
+                *)   echo "::error::HTTP $code от $VAULT/api/secrets/grants"; cat /tmp/grant.json; exit 1 ;;
+              esac
+              rm -f /tmp/grant.json
+              show ;;
+            revoke)
+              [ "$GRANT_ID" != "0" ] || { echo "::error::revoke без grant_id"; exit 1; }
+              curl -sf --max-time 15 -X DELETE "$VAULT/api/secrets/grants" \
+                -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+                --data-binary "$(jq -n --argjson id "$GRANT_ID" '{id:$id}')" | jq -c .
+              show ;;
+            *) echo "::error::неизвестный mode $MODE"; exit 1 ;;
+          esac
+          REMOTE
