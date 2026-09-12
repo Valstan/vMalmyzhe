@@ -94,7 +94,9 @@ in Chrome, PATCH `_status: published` + `date`/`publishedAt` = createdAt):
 - `.github/workflows/grant-publish-key.yml` — `status` / `propose` /
   `revoke` grant'а `INGEST_PUBLISH_KEY` → комната `setka` под именем
   `VMALMYZHE_PUBLISH_KEY` (двусторонняя форма D-061, с бокса, значений не
-  печатает). **Запустить `propose` после мержа** и записать id сюда.
+  печатает). **`propose` выполнен 12.09: grant #8, `pending`** (рядом
+  активные #2 `VMALMYZHE_INGEST_KEY` → setka и #3 `ESA_CLIENT_SECRET_PORTAL`
+  ← setka). Ждёт `accept` Сарафана; `revoke` — по id 8.
 - Письмо Мозгу `2026-09-12-publish-key-granted-to-sarafan…` — три шага
   Сарафану: allowlist + accept, `publish: true` + `X-Publish-Key`, `date`.
 - **Приёмка после ответа Сарафана:** первая доставка приходит
