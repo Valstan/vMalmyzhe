@@ -54,10 +54,20 @@
 - `next-env.d.ts` в коммит не брать: Next 15.5 дописывает туда ссылку на
   `.next/types/routes.d.ts`, которой в CI без сборки нет.
 
+**Пятый PR сессии — заголовки безопасности и G311 (#84):**
+
+- До него портал не отдавал ни одного заголовка безопасности; nginx тоже.
+  Теперь `lib/securityHeaders.ts` → `next.config.ts` (был `.js`): HSTS без
+  includeSubDomains, nosniff, Referrer-Policy, X-Frame-Options, CSP
+  `frame-ancestors/form-action/base-uri` с origin ЕСА одним экземпляром из
+  `esa.ts`. `poweredByHeader: false`. Полная CSP с `script-src` — не делали:
+  админка и Метрика на inline. Письмо Мозгу `2026-09-12-g311-form-action…`.
+- Проверка на проде после выката: `curl -sI https://вмалмыже.рф/` должен
+  отдать пять заголовков; живое «Выйти» с чистой консолью — владелец.
+
 **Открыто (PENDING с 12.09):**
 
-1. G311 `form-action` + origin ЕСА — как и было.
-2. G339 — `payload-token` без `__Host-`; три места должны сойтись
+1. G339 — `payload-token` без `__Host-`; три места должны сойтись
    (`cookiePrefix`, `auth.cookies`, свои роуты) — отдельный PR с пробой входа в
    админку.
 

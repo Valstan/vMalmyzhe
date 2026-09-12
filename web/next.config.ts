@@ -2,14 +2,18 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 import { withPayload } from '@payloadcms/next/withPayload'
+import type { NextConfig } from 'next'
+
+import { buildSecurityHeaders } from './src/lib/securityHeaders'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const NEXT_PUBLIC_SERVER_URL =
   process.env.NEXT_PUBLIC_SERVER_URL || process.env.__NEXT_PRIVATE_ORIGIN || 'http://localhost:3004'
 
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+// .ts, а не .mjs (с 12.09): конфиг импортирует origin ЕСА из того же модуля,
+// что и рантайм, чтобы CSP `form-action` и OIDC-клиент не разошлись (G311).
+const nextConfig: NextConfig = {
   // Позволяет агентам и локальным проверкам запускать изолированную сборку,
   // не мешая уже работающему dev-серверу соседнего проекта.
   distDir: process.env.NEXT_DIST_DIR || '.next',
@@ -29,12 +33,18 @@ const nextConfig = {
         const url = new URL(item)
         return {
           hostname: url.hostname,
-          protocol: url.protocol.replace(':', ''),
+          protocol: url.protocol.replace(':', '') as 'http' | 'https',
         }
       }),
     ],
   },
   reactStrictMode: true,
+  // «X-Powered-By: Next.js, Payload» наружу не нужен: версия стека — подсказка
+  // сканеру, а он и так стучит (журнал 12.09).
+  poweredByHeader: false,
+  // Заголовки безопасности — на все маршруты, включая /admin и /api.
+  // Значение фиксируется на сборке: см. lib/securityHeaders.ts.
+  headers: async () => [{ source: '/(.*)', headers: buildSecurityHeaders() }],
 }
 
 export default withPayload(nextConfig, { devBundleServerPackages: false })
