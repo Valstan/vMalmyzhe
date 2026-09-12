@@ -27,11 +27,29 @@
   Красные прогоны обёртки и гарда показаны локально; первый настоящий прогон
   обёртки — `deploy-prod` при мерже этого PR.
 
+**Третий и четвёртый PR сессии — аудит зависимостей (#312) и обновление:**
+
+- `audit-deps.yml`: `pnpm audit --prod --audit-level=high` пн/чт, кнопкой и при
+  смене lockfile. Отдельный workflow, не required check. Красный показан на
+  его же PR (#81): 4 critical на проде — **payload < 3.79.1 pre-auth account
+  takeover, next < 15.5.24 RCE в image optimization**.
+- Обновление: `next` 15.4.11 → 15.5.24, `payload`/`@payloadcms/*` 3.75.0 →
+  3.89.0 (тянет drizzle-orm 0.45.2, nodemailer 9, undici 7.29 — все с high
+  CVE в старых), `sharp` 0.35.4, `pnpm.overrides` на fast-uri/js-yaml/
+  immutable/postcss/nanoid. Итог: 0 high/critical в прод-зависимостях.
+  Breaking в 3.79 (виджеты) и 3.89 (access для jobs) нас не касаются — ни
+  того ни другого в коде нет. `payload-types.ts` и `importMap.js`
+  перегенерированы.
+- ⚠️ **Схема БД под 3.75 → 3.89 не проверялась** — локального Postgres нет,
+  `migrate:create` не запускался. В release notes 3.76–3.89 миграций не
+  объявлено. Приёмка — `deploy-prod`: smoke `/`, `/news`, `/admin` и журнал.
+  Если прод упадёт на схеме — revert PR, деплой откатит; затем миграция по
+  `web/src/migrations/README.md`.
+
 **Открыто (PENDING с 12.09):**
 
 1. G311 `form-action` + origin ЕСА — как и было.
-2. #312 — `npm audit` по расписанию (сейчас аудита нет вовсе).
-3. G339 — `payload-token` без `__Host-`; три места должны сойтись
+2. G339 — `payload-token` без `__Host-`; три места должны сойтись
    (`cookiePrefix`, `auth.cookies`, свои роуты) — отдельный PR с пробой входа в
    админку.
 
