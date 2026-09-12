@@ -1,0 +1,54 @@
+name: Audit deps
+
+# Аудит зависимостей по расписанию, а не только когда кто-то открыл PR (#312,
+# дайджест brain 12.09: у КАРМАНа два critical RCE в `next` жили на проде
+# между PR, потому что гейт говорит только в PR). Первый прогон 12.09 —
+# красный по факту: 4 critical (payload < 3.79.1 pre-auth account takeover,
+# next < 15.5.24 RCE) — это и есть показанный красный (#104).
+#
+# Только прод-зависимости (`--prod`): dev-цепочка eslint/vitest/knip на прод
+# не едет, её шум прятал бы настоящее. Порог — high: moderate и ниже не роняют.
+# Красный прогон — не гейт мержа (workflow отдельный), а сигнал: письмо в
+# Actions → обновить и закрыть отдельным PR.
+
+on:
+  schedule:
+    - cron: '17 5 * * 1,4'   # пн и чт 05:17 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'web/package.json'
+      - 'web/pnpm-lock.yaml'
+      - '.github/workflows/audit-deps.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Enable corepack + pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.15.0 --activate
+
+      # Установка не нужна: audit читает lockfile. Без install шаг быстрее и не
+      # зависит от postinstall-скриптов.
+      - name: pnpm audit (prod, high+)
+        working-directory: web
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm audit --prod --audit-level=high 2>&1 | tee audit.txt
+          rc=${PIPESTATUS[0]}
+          echo "## pnpm audit --prod --audit-level=high" >> "$GITHUB_STEP_SUMMARY"
+          tail -n 3 audit.txt >> "$GITHUB_STEP_SUMMARY"
+          [ "$rc" = 0 ] || echo "::error::в прод-зависимостях есть уязвимости уровня high/critical — обновить отдельным PR"
+          exit "$rc"
