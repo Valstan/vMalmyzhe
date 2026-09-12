@@ -40,11 +40,19 @@
   Breaking в 3.79 (виджеты) и 3.89 (access для jobs) нас не касаются — ни
   того ни другого в коде нет. `payload-types.ts` и `importMap.js`
   перегенерированы.
-- ⚠️ **Схема БД под 3.75 → 3.89 не проверялась** — локального Postgres нет,
-  `migrate:create` не запускался. В release notes 3.76–3.89 миграций не
-  объявлено. Приёмка — `deploy-prod`: smoke `/`, `/news`, `/admin` и журнал.
-  Если прод упадёт на схеме — revert PR, деплой откатит; затем миграция по
-  `web/src/migrations/README.md`.
+- Схема БД под 3.75 → 3.89 локально не проверялась (Postgres нет), в release
+  notes 3.76–3.89 миграций не объявлено. **Приёмка после мержа #82 прошла:**
+  `deploy-prod` зелёный, юнит active, NRestarts=0; `/`, `/news`, `/admin`,
+  `/api/auth/me` — 200; `/api/posts` (19), `/api/sections` (7), `/api/media`
+  (1183), `/api/globals/header` — 200 с данными; в журнале ни строки про
+  drizzle/relation/column. Если что-то всплывёт позже — revert #82, затем
+  миграция по `web/src/migrations/README.md`.
+- ⚠️ В журнале прода 6 строк `Failed to find Server Action "x"/"r2s"` —
+  чужие POST с выдуманными action-id, сканеры щупают Next. Не наша ошибка,
+  но повод: письмо Мозгу `2026-09-12-payload-pre-auth-takeover-next-rce…`
+  (`urgency: high`, всем Payload-проектам проверить версию).
+- `next-env.d.ts` в коммит не брать: Next 15.5 дописывает туда ссылку на
+  `.next/types/routes.d.ts`, которой в CI без сборки нет.
 
 **Открыто (PENDING с 12.09):**
 
