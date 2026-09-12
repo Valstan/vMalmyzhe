@@ -18,7 +18,10 @@ export type EsaConfig = {
 
 // Issuer ЕСА — вход.вмалмыже.рф. В коде только punycode (G133): кириллический
 // хост в сравнении молча не совпадёт, а в CI-bash ещё и бьётся.
-const ESA_ISSUER_DEFAULT = 'https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai'
+// Экспорт — ради одного экземпляра: тот же origin нужен CSP `form-action`
+// (`lib/securityHeaders.ts` → `next.config.ts`), которая фиксируется на сборке
+// (G311). Два места, не импортирующие друг друга, однажды разойдутся.
+export const ESA_ISSUER_DEFAULT = 'https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai'
 
 // Открытый идентификатор клиента, выданный Сарафаном 25.08.
 const ESA_CLIENT_ID_DEFAULT = 'portal'

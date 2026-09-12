@@ -113,7 +113,7 @@ jobs:
           # указывают на localhost — при полностью зелёных build и smoke-check
           # (тот стучится в локальный порт и такого не видит).
           NEXT_PUBLIC_SERVER_URL: ${{ vars.NEXT_PUBLIC_SERVER_URL }}
-          # Включает output:'standalone' (next.config.js).
+          # Включает output:'standalone' (next.config.ts).
           STANDALONE_BUILD: '1'
         run: |
           set -eo pipefail
