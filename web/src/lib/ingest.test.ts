@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildContent, buildPostData, normalizeVideos, secretMatches } from './ingest'
+import {
+  buildContent,
+  buildPostData,
+  normalizeTitle,
+  normalizeVideos,
+  resolveDate,
+  secretMatches,
+} from './ingest'
 
 // Тесты написаны по следам двух багов, доехавших до прода 2026-08-03 через
 // полностью зелёные lint и typecheck (ревизия гейтов #104). Каждый блок ниже —
@@ -148,5 +155,27 @@ describe('картинки встраиваются в текст, а не ко�
     }
     const uploads = content.root.children.filter((n) => n.type === 'upload')
     expect(uploads.map((u) => u.value)).toEqual([12])
+  })
+})
+
+describe('дата без даты: запасное значение — момент доставки (12.09: 379 черновиков с null)', () => {
+  const now = '2026-09-12T16:20:00.000Z'
+  it('присланная дата важнее запасной', () => {
+    expect(resolveDate('2026-09-01T00:00:00.000Z', now)).toBe('2026-09-01T00:00:00.000Z')
+  })
+  it('без даты — момент доставки, и он же уходит в publishedAt', () => {
+    const data = buildPostData({ ...base, publish: true, nowIso: now })
+    expect(data.date).toBe(now)
+    expect(data.publishedAt).toBe(now)
+  })
+  it('без даты и без nowIso — как раньше, поле пустое (совместимость)', () => {
+    expect(buildPostData({ ...base, publish: true }).date).toBeUndefined()
+  })
+})
+
+describe('дубль по заголовку от другого паблика', () => {
+  it('нормализация: регистр, пробелы, хвосты', () => {
+    expect(normalizeTitle('  Открытие «умной»   площадки ')).toBe('открытие «умной» площадки')
+    expect(normalizeTitle('ОТКРЫТИЕ «УМНОЙ» ПЛОЩАДКИ')).toBe('открытие «умной» площадки')
   })
 })

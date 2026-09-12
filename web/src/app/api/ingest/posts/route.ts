@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import config from '../../../../payload.config'
 import {
   buildPostData,
+  normalizeTitle,
   normalizeVideos,
   secretMatches,
   type IncomingVideo,
@@ -147,6 +148,31 @@ export async function POST(request: Request): Promise<NextResponse> {
     )
   }
 
+  // Дубль той же новости от другого паблика: тот же заголовок за последние
+  // 7 дней под другим vkPostId. Не создаём и медиа не качаем — отвечаем,
+  // чей это дубль. Повторная доставка СВОЕГО vkPostId сюда не попадает.
+  if (!existingPost) {
+    const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()
+    const sameTitle = await payload.find({
+      collection: 'posts',
+      where: {
+        and: [{ title: { equals: title } }, { createdAt: { greater_than: weekAgo } }],
+      },
+      draft: true,
+      limit: 5,
+    })
+    const dup = sameTitle.docs.find(
+      (p) => p.source?.vkPostId !== vkPostId && normalizeTitle(p.title) === normalizeTitle(title),
+    )
+    if (dup) {
+      warnings.push(`duplicate title of post ${dup.id} (${dup.source?.vkPostId}); skipped`)
+      return NextResponse.json(
+        { created: false, updated: false, duplicateOf: dup.id, warnings },
+        { status: 200 },
+      )
+    }
+  }
+
   // Медиа перекладываем к себе (не храним ВК-CDN-ссылки как основные).
   const images = Array.isArray(body.images) ? body.images.slice(0, MAX_IMAGES) : []
   if (Array.isArray(body.images) && body.images.length > MAX_IMAGES) {
@@ -194,7 +220,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     date: body.date,
     publishedAt: body.publishedAt,
     sectionId,
+    nowIso: new Date().toISOString(),
   })
+  if (!body.date) warnings.push('date missing: set to delivery time')
 
   if (existingPost) {
     // Draft уже есть — обновляем содержимое (правки поста в ВК доезжают),
