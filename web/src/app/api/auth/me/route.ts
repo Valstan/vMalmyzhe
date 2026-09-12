@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 
-import { SESSION_COOKIE, openSession, publicProfile } from '../../../../lib/auth/session'
+import { openSession, publicProfile, readSessionCookie } from '../../../../lib/auth/session'
 import { authEnv } from '../_shared'
 
 // GET /api/auth/me — кто вошёл, для кнопки в шапке. Страницы портала остаются
@@ -16,7 +16,7 @@ export const GET = async (req: NextRequest): Promise<Response> => {
   if (!env) return NextResponse.json({ enabled: false, user: null }, noStore)
 
   const session = openSession(
-    req.cookies.get(SESSION_COOKIE)?.value,
+    readSessionCookie((name) => req.cookies.get(name)?.value),
     env.secret,
     Math.floor(Date.now() / 1000),
   )

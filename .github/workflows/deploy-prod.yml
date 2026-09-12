@@ -161,12 +161,25 @@ jobs:
             ServerAliveInterval 30
           CFG
           chmod 600 ~/.ssh/config
+          # G315: ssh/scp при отказе связи печатают хост и порт отдельными словами,
+          # маскировка секретов их не ловит, а репо публичный. Обёртка глушит
+          # stderr клиента; удалённый скрипт печатает диагностику в stdout
+          # (exec 2>&1 первой строкой), код 255 объясняем словами.
+          cat > ~/.ssh/quiet <<'SH'
+          #!/usr/bin/env bash
+          "$@" 2>/dev/null
+          rc=$?
+          [ "$rc" = 255 ] && echo "::error::$1 не соединился с боксом (код 255); хост и порт не печатаем"
+          exit "$rc"
+          SH
+          chmod 700 ~/.ssh/quiet
 
       - name: Ship artifact + restart
         run: |
           set -e
-          scp -q vmalmyzhe-app.tgz vmalmyzhe:/tmp/vmalmyzhe-app.tgz
-          ssh vmalmyzhe 'bash -s' "${{ github.sha }}" <<'REMOTE'
+          ~/.ssh/quiet scp -q vmalmyzhe-app.tgz vmalmyzhe:/tmp/vmalmyzhe-app.tgz
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "${{ github.sha }}" <<'REMOTE'
+          exec 2>&1
           set -e
           SHA="$1"
           # Корень релизов — в $HOME пользователя деплоя (heredoc закавычен,
@@ -217,7 +230,8 @@ jobs:
           # параметры на боксе сдвигаются. Проверяем здесь, как это уже сделано
           # для четырёх SSH-реквизитов в шаге Setup SSH.
           [ -n "$PROD_ENV_FILE" ] || { echo "::error::secrets.PROD_ENV_FILE не задан — зеркалирование не выполнено"; exit 1; }
-          ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
+          exec 2>&1
           set -eo pipefail
           ENV_FILE="$1"
           command -v jq >/dev/null || { echo "::warning::jq на боксе нет — зеркалирование пропущено"; exit 0; }
@@ -316,7 +330,8 @@ jobs:
       - name: Smoke check — local routes (/, /news, /admin)
         run: |
           set -e
-          ssh vmalmyzhe 'bash -s' <<'REMOTE'
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' <<'REMOTE'
+          exec 2>&1
           set -e
           sleep 6   # дать сервису подняться после systemctl restart
           fail=0
@@ -344,7 +359,8 @@ jobs:
       - name: Service state + журнал (урезанный, с редакцией)
         if: always()
         run: |
-          ssh vmalmyzhe 'bash -s' <<'REMOTE' 2>&1 || true
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' <<'REMOTE' || true
+          exec 2>&1
           H="$(hostname -s)"; F="$(hostname -f 2>/dev/null || true)"
           sudo systemctl show vmalmyzhe -p ActiveState -p SubState -p Result -p ExecMainStatus -p NRestarts
           sudo journalctl -u vmalmyzhe -n 60 --no-pager -o cat \

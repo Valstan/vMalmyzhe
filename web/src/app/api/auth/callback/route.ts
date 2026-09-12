@@ -9,11 +9,12 @@ import {
 } from '../../../../lib/auth/oidc'
 import {
   SESSION_COOKIE,
+  SESSION_COOKIE_ATTRS,
   SESSION_MAX_AGE_S,
   sealSession,
   sessionFromClaims,
 } from '../../../../lib/auth/session'
-import { TX_COOKIE, authEnv, clearTxCookie, isSecure } from '../_shared'
+import { TX_COOKIE, authEnv, clearTxCookie } from '../_shared'
 
 // GET /api/auth/callback — возврат из ЕСА: state против подписанной cookie
 // (CSRF), code → токены (PKCE-verifier + client_secret), проверка id_token
@@ -63,10 +64,7 @@ export const GET = async (req: NextRequest): Promise<Response> => {
     const res = NextResponse.redirect(new URL(tx.next ?? '/', env.serverUrl), 302)
     clearTxCookie(res)
     res.cookies.set(SESSION_COOKIE, sealSession(session, env.secret), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: isSecure(env),
-      path: '/',
+      ...SESSION_COOKIE_ATTRS,
       maxAge: SESSION_MAX_AGE_S,
     })
     return res
