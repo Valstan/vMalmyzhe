@@ -156,7 +156,24 @@ export type PostDataInput = {
   date?: string
   publishedAt?: string
   sectionId?: number
+  // «Сейчас» приёмника — запасная дата, когда источник не прислал свою.
+  // Параметр, а не Date.now(): тест фиксирует значение.
+  nowIso?: string
 }
+
+// Дата новости: присланная, иначе момент доставки. Конвейер Сарафана шлёт
+// посты без `date` (12.09: 379 черновиков с date=null), а лента сортируется по
+// `-date` — без запасного значения такие посты выпадают из порядка и без даты
+// на карточке. Доставка идёт 2–3 раза в сутки, ошибка запасной даты — до суток.
+export const resolveDate = (date: string | undefined, nowIso?: string): string | undefined =>
+  date || nowIso
+
+// Дубль по заголовку: одна новость от разных пабликов района приходит под
+// разными vkPostId с одинаковым заголовком классификатора (12.09: 7 из 379).
+// Идемпотентность по vkPostId их не ловит. Сравниваем нормализованный
+// заголовок; окно по дате — у вызывающего.
+export const normalizeTitle = (title: string): string =>
+  title.trim().toLowerCase().replace(/\s+/g, ' ')
 
 // Тело документа для payload.create/update.
 //
@@ -166,11 +183,11 @@ export type PostDataInput = {
 export const buildPostData = (input: PostDataInput) => ({
   ...(input.publish ? { _status: 'published' as const } : {}),
   title: input.title,
-  date: input.date || undefined,
+  date: resolveDate(input.date, input.nowIso),
   // Дата публикации = дата оригинала, если её прислали: иначе хук
   // populatePublishedAt проставит «сегодня», и трёхдневная новость
   // выглядела бы свежей.
-  publishedAt: input.publishedAt || input.date || undefined,
+  publishedAt: input.publishedAt || resolveDate(input.date, input.nowIso),
   section: input.sectionId,
   content:
     input.text || input.videos.length || input.mediaIds.length
