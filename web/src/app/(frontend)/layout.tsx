@@ -4,7 +4,7 @@ import { getPayload } from 'payload'
 import React from 'react'
 
 import './globals.css'
-import { SITE_DESC, SITE_NAME, SITE_URL } from '../../lib/site'
+import { SITE_DESC, SITE_NAME, SITE_TITLE_HOME, SITE_URL } from '../../lib/site'
 import { degraded, withRetry } from '../../lib/withRetry'
 import type { ChromeContent, NavItem } from './components/SiteChrome'
 import { SiteChrome } from './components/SiteChrome'
@@ -13,7 +13,7 @@ import { SiteJsonLd } from './components/SiteJsonLd'
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: SITE_NAME,
+    default: SITE_TITLE_HOME,
     template: `%s — ${SITE_NAME}`,
   },
   description: SITE_DESC,
