@@ -21,14 +21,14 @@
     "test": "cross-env NODE_OPTIONS=--no-deprecation vitest run"
   },
   "dependencies": {
-    "@payloadcms/db-postgres": "3.89.0",
-    "@payloadcms/email-nodemailer": "3.89.0",
-    "@payloadcms/next": "3.89.0",
-    "@payloadcms/richtext-lexical": "3.89.0",
+    "@payloadcms/db-postgres": "3.90.1",
+    "@payloadcms/email-nodemailer": "3.90.1",
+    "@payloadcms/next": "3.90.1",
+    "@payloadcms/richtext-lexical": "3.90.1",
     "graphql": "^16.8.2",
     "jose": "5.9.6",
     "next": "15.5.24",
-    "payload": "3.89.0",
+    "payload": "3.90.1",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "sharp": "0.35.4"
