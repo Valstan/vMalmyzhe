@@ -1,5 +1,6 @@
 import * as migration_20260621_145321_initial from './20260621_145321_initial';
 import * as migration_20260726_141845_m0_news_portal from './20260726_141845_m0_news_portal';
+import * as migration_20260929_002000_reset_password_requested_at from './20260929_002000_reset_password_requested_at';
 
 export const migrations = [
   {
@@ -11,5 +12,10 @@ export const migrations = [
     up: migration_20260726_141845_m0_news_portal.up,
     down: migration_20260726_141845_m0_news_portal.down,
     name: '20260726_141845_m0_news_portal'
+  },
+  {
+    up: migration_20260929_002000_reset_password_requested_at.up,
+    down: migration_20260929_002000_reset_password_requested_at.down,
+    name: '20260929_002000_reset_password_requested_at'
   },
 ];
