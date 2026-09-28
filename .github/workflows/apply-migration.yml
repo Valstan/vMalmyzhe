@@ -139,6 +139,33 @@ jobs:
           [ -n "$DB" ] || { echo "::error::DATABASE_URI не прочитан из prod-env — миграция НЕ применена"; exit 1; }
           echo "Применяю $NAME ..."
           psql "$DB" -v ON_ERROR_STOP=1 -f /tmp/mig.sql
+          # Приёмка схемы (письмо brain 21.09, строка «колонка на месте»; класс
+          # молчаливого отказа: миграция «применена» при неизменившейся схеме).
+          # Ложным зелёным здесь была бы и запись в реестр, и сам psql: ON_ERROR_STOP
+          # ловит синтаксис, но не отсутствие ожидаемого результата. Проходим по
+          # САМОМУ файлу, а не по списку руками — новый ADD COLUMN попадает в
+          # проверку сам. grep -q из G322 не используем: под pipefail он даёт ложное
+          # «не найдено» (erratum 15.09), поэтому вывод идёт в переменные явно.
+          echo "== затронутые таблицы, колонки из information_schema =="
+          for t in $(grep -oE 'ALTER TABLE "[A-Za-z0-9_]+"' /tmp/mig.sql | sed -E 's/.*"([A-Za-z0-9_]+)".*/\1/' | sort -u); do
+            echo "-- $t"
+            psql "$DB" -tAc "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='$t' ORDER BY column_name"
+          done
+          BAD=0
+          while IFS= read -r line; do
+            t=$(printf '%s' "$line" | sed -E 's/ALTER TABLE "([A-Za-z0-9_]+)".*/\1/')
+            c=$(printf '%s' "$line" | sed -E 's/.*ADD COLUMN (IF NOT EXISTS )?"([A-Za-z0-9_]+)".*/\2/')
+            n=$(psql "$DB" -tAc "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='$t' AND column_name='$c'")
+            case "$n" in
+              1) echo "колонка $t.$c: есть" ;;
+              *) echo "::error::колонка $t.$c не найдена в information_schema после применения миграции"; BAD=1 ;;
+            esac
+          # Процессная подстановка, а не конвейер: `exit`/`BAD=` внутри `while` из
+          # пайпа жили бы в под-шелле и шаг оставался бы зелёным (тот же класс).
+          # Обе формы `ADD COLUMN` (с IF NOT EXISTS и без) — иначе проверка
+          # молча пропускала бы записи, написанные по-старому.
+          done < <(grep -oE 'ALTER TABLE "[A-Za-z0-9_]+" ADD COLUMN (IF NOT EXISTS )?"[A-Za-z0-9_]+"' /tmp/mig.sql || true)
+          [ "$BAD" -eq 0 ] || { rm -f /tmp/mig.sql; echo "::error::приёмка схемы не прошла — миграция откатывается вручную, деплой не запускать"; exit 1; }
           rm -f /tmp/mig.sql
           # Запись в реестр остаётся best-effort, но причину больше не выдумываем:
           # раньше любой отказ — нет прав на INSERT, обрыв, переполнение диска —
