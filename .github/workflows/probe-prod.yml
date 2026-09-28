@@ -158,11 +158,16 @@ jobs:
           while read -r s; do
             [ -n "$s" ] || continue
             N=$((N + 1))
-            if printf '%s\n' "$COLS" | grep -qx "${s}_id"; then
-              HIT=$((HIT + 1))
-            else
-              MISS="$MISS ${s}_id"
-            fi
+            # G322 (erratum 15.09): `printf | grep -qx` под pipefail врёт —
+            # grep выходит на первом совпадении, printf получает EPIPE и
+            # конвейер отдаёт 141, найденное читается как ненайденное. Замер
+            # у нас: 500 ложных из 500 на большом haystack (пайп) против 0 из
+            # 500 на case; у Казанской на боксу — 49 из 1800. Лечение из
+            # письма: case без пайпа; пайпа в этой проверке больше нет.
+            case $'\n'"$COLS"$'\n' in
+              *$'\n'"${s}_id"$'\n'*) HIT=$((HIT + 1)) ;;
+              *) MISS="$MISS ${s}_id" ;;
+            esac
           done < /tmp/vm-slugs.txt
           rm -f /tmp/vm-slugs.txt
           # Считаем только колонки под коллекции: parent_id — служебная, к
