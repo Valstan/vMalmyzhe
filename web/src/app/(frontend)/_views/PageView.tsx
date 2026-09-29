@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation'
 
 import { SITE_NAME } from '../../../lib/site'
 import { degraded, withRetry } from '../../../lib/withRetry'
+import { extractText } from '../../../lib/lexicalText'
 import { RichText } from '../../../lib/RichText'
 
 type PageDoc = {
@@ -29,7 +30,9 @@ export async function pageMeta(slug: string): Promise<Metadata> {
   try {
     const page = await getPage(slug)
     if (!page) return {}
-    return { title: page.title || SITE_NAME }
+    // Description из первого абзаца — иначе страница наследует общий SITE_DESC
+    // и Вебмастер видит дубли (замечание 29.09, D-088 п.3).
+    return { title: page.title || SITE_NAME, description: extractText(page.content) || undefined }
   } catch (err) {
     return degraded('PageView/pageMeta', {}, err)
   }

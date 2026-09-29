@@ -20,7 +20,10 @@ export async function generateMetadata({ params }: Args): Promise<Metadata> {
   if (!section) return {}
   return {
     title: section.title,
-    description: section.description || undefined,
+    // Пустой description рубрики наследовал бы общий SITE_DESC дублем
+    // (замечание Вебмастера 29.09) — подставляем формулу с именем рубрики.
+    description:
+      section.description || `Новости рубрики «${section.title}» — Малмыж и Малмыжский район.`,
     alternates: { canonical: `/news/section/${encodeURIComponent(section.slug ?? '')}` },
   }
 }

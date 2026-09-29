@@ -1,7 +1,7 @@
 import React from 'react'
 
 import { jsonLdHtml } from '../../../lib/jsonLd'
-import { SITE_DESC, SITE_NAME, SITE_URL } from '../../../lib/site'
+import { CONTACTS, SITE_DESC, SITE_NAME, SITE_URL } from '../../../lib/site'
 
 // Разметка издания и сайта — на каждой странице. Нужна, чтобы машина понимала
 // не только «о чём эта страница», но и «что это за источник»: кто издаёт, о каком
@@ -22,6 +22,11 @@ const graph = {
         name: 'Малмыжский район, Кировская область, Россия',
       },
       knowsLanguage: 'ru',
+      // Контакты организации — решение владельца 29.09 (состав из Портфолио).
+      // Уличного адреса нет: место задано только через areaServed выше.
+      sameAs: [CONTACTS.telegram, CONTACTS.github],
+      telephone: CONTACTS.phone,
+      email: CONTACTS.email,
     },
     {
       '@type': 'WebSite',

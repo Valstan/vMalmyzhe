@@ -20,5 +20,8 @@ export async function generateMetadata({ params }: Args): Promise<Metadata> {
   const { slug, n } = await params
   const section = await getSectionBySlug(decodeURIComponent(slug))
   if (!section) return {}
-  return { title: `${section.title} — страница ${n}` }
+  return {
+    title: `${section.title} — страница ${n}`,
+    description: `Рубрика «${section.title}» — страница ${n}. Новости Малмыжа и района.`,
+  }
 }

@@ -2,7 +2,7 @@ import Link from 'next/link'
 import React from 'react'
 
 import { METRIKA_ID } from '../../../lib/metrika'
-import { AUTHOR_CREDIT, AUTHOR_URL, SERVICES_CATALOG_URL, SITE_NAME } from '../../../lib/site'
+import { AUTHOR_CREDIT, AUTHOR_URL, CONTACTS, SERVICES_CATALOG_URL, SITE_NAME } from '../../../lib/site'
 import { AuthBadge } from './AuthBadge'
 import { MetrikaInformer } from './MetrikaInformer'
 import { YandexMetrika } from './YandexMetrika'
@@ -105,7 +105,16 @@ export function SiteChrome({
           </div>
           <div>
             <strong>Связаться</strong>
-            {chrome?.contacts ? <p className="site-footer__contacts">{chrome.contacts}</p> : <p>Предложить новость или событие</p>}
+            {chrome?.contacts ? (
+              <p className="site-footer__contacts">{chrome.contacts}</p>
+            ) : (
+              // Фолбэк — публичные контакты (решение владельца 29.09).
+              <p className="site-footer__contacts">
+                <a href={`tel:${CONTACTS.phone}`}>{CONTACTS.phoneLabel}</a>
+                {', '}
+                <a href={CONTACTS.telegram}>{CONTACTS.telegramLabel}</a>
+              </p>
+            )}
           </div>
         </div>
         {METRIKA_ID ? (

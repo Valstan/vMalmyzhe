@@ -1,7 +1,7 @@
 import config from '@payload-config'
 import { getPayload } from 'payload'
 
-import { SITE_DESC, SITE_NAME, SITE_URL } from '../../lib/site'
+import { CONTACTS, SITE_DESC, SITE_NAME, SITE_URL } from '../../lib/site'
 
 // /llms.txt — краткая карта сайта для языковых моделей (складывающийся стандарт
 // llmstxt.org). Зачем отдельно от sitemap.xml: sitemap отдаёт голые адреса, а
@@ -95,6 +95,17 @@ export async function GET(): Promise<Response> {
   }
 
   lines.push('## Ещё', '', `- [Все новости](${SITE_URL}/news)`, `- [Поиск](${SITE_URL}/search)`, '')
+
+  // Контакты организации текстом (п.1–2 чек-листа D-088, решение владельца 29.09:
+  // состав из Портфолио). Уличного адреса нет — только место обслуживания выше.
+  lines.push(
+    '## Контакты организации',
+    '',
+    `- Телефон: ${CONTACTS.phoneLabel}`,
+    `- Telegram: ${CONTACTS.telegramLabel} (${CONTACTS.telegram})`,
+    `- Почта: ${CONTACTS.email}`,
+    '',
+  )
 
   return new Response(lines.join('\n'), {
     headers: {

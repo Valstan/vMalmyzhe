@@ -7,6 +7,7 @@ import { getPayload } from 'payload'
 import { notFound } from 'next/navigation'
 
 import { jsonLdHtml } from '../../../lib/jsonLd'
+import { extractText } from '../../../lib/lexicalText'
 import { SITE_NAME, SITE_URL } from '../../../lib/site'
 import { degraded, withRetry } from '../../../lib/withRetry'
 import { RichText } from '../../../lib/RichText'
@@ -39,20 +40,6 @@ async function getPost(slug: string): Promise<PostDoc | null> {
     })
     return (res.docs[0] as PostDoc | undefined) ?? null
   })
-}
-
-// Плейн-текст из lexical-контента — для meta description (SEO #051).
-function extractText(content: unknown, max = 200): string {
-  const parts: string[] = []
-  const walk = (node: unknown): void => {
-    if (!node || typeof node !== 'object') return
-    const n = node as { text?: unknown; children?: unknown[] }
-    if (typeof n.text === 'string') parts.push(n.text)
-    if (Array.isArray(n.children)) n.children.forEach(walk)
-  }
-  walk((content as { root?: unknown } | null | undefined)?.root)
-  const text = parts.join(' ').replace(/\s+/g, ' ').trim()
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
 // Есть ли картинки, встроенные в текст (upload-узлы)? Новые посты (с 05.08)

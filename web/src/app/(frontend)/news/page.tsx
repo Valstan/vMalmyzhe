@@ -7,6 +7,8 @@ export const revalidate = 60
 
 export const metadata: Metadata = {
   title: 'Новости',
+  description:
+    'Все новости Малмыжа и Малмыжского района одной лентой: события, культура, происшествия, объявления.',
 }
 
 export default function NewsPage() {
