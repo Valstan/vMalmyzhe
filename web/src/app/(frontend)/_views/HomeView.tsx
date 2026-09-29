@@ -5,6 +5,7 @@ import { getPayload } from 'payload'
 import { degraded, withRetry } from '../../../lib/withRetry'
 import { findPosts, getSections } from '../../../lib/portal'
 import { BannerSlot, getFeedBanners } from '../components/BannerSlot'
+import { FaqSection } from '../components/FaqSection'
 import { PostList, SectionChips } from '../components/PostList'
 
 type Home = {
@@ -112,6 +113,8 @@ export async function HomeView() {
           <p style={{ whiteSpace: 'pre-line' }}>{home.contacts}</p>
         </section>
       ) : null}
+
+      <FaqSection />
     </>
   )
 }
