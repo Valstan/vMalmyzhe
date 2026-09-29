@@ -373,6 +373,9 @@ img {
 .business-grid h3 { font-size: 1.2rem; margin: .8rem 0 .35rem; }
 .business-grid p { color: var(--color-muted); margin: 0; }
 .ad-label { display: inline-block; border-radius: 4px; padding: .2rem .45rem; background: #f7e5af; color: #6d5000; font-size: .65rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.faq-item { background: var(--color-paper); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1rem 1.25rem; margin-bottom: .6rem; }
+.faq-item summary { cursor: pointer; font-weight: 750; }
+.faq-item p { color: var(--color-muted); margin: .5rem 0 0; }
 
 @media (max-width: 800px) {
   .utility-bar__message { display: none; }
