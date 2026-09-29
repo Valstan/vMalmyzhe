@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 
 type Me = { enabled: boolean; user: { name: string; email: string | null } | null }
 
@@ -10,7 +11,16 @@ type Me = { enabled: boolean; user: { name: string; email: string | null } | nul
 // ЕСА выглядит как раньше.
 export function AuthBadge() {
   const [me, setMe] = useState<Me | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  // Флаг ?auth= читаем хуком, а не setState в эффекте: react-hooks v6
+  // (set-state-in-effect) запрещает синхронный setState в теле эффекта.
+  // useSearchParams требует Suspense-границу — она в SiteChrome.
+  const auth = useSearchParams().get('auth')
+  const notice =
+    auth === 'failed'
+      ? 'Вход не удался. Попробуйте ещё раз.'
+      : auth === 'unavailable'
+        ? 'Единая система авторизации сейчас недоступна.'
+        : null
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -18,10 +28,6 @@ export function AuthBadge() {
       .then((r) => (r.ok ? (r.json() as Promise<Me>) : null))
       .then((m) => m && setMe(m))
       .catch(() => {})
-
-    const auth = new URLSearchParams(window.location.search).get('auth')
-    if (auth === 'failed') setNotice('Вход не удался. Попробуйте ещё раз.')
-    if (auth === 'unavailable') setNotice('Единая система авторизации сейчас недоступна.')
 
     return () => ctrl.abort()
   }, [])

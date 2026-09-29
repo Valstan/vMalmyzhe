@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { ESA_ISSUER_DEFAULT } from './auth/esa'
-import { buildContentSecurityPolicy, buildSecurityHeaders, esaOriginForCsp } from './securityHeaders'
+import { buildContentSecurityPolicy, buildSecurityHeaders, esaOriginForCsp } from './securityHeaders.mjs'
 
 describe('CSP form-action — G311', () => {
   it('origin ЕСА в form-action вместе с self: редирект 303 на end_session не режется', () => {

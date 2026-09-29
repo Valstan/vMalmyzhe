@@ -1,20 +1,16 @@
-import { dirname } from 'path'
-import { fileURLToPath } from 'url'
-import { FlatCompat } from '@eslint/eslintrc'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-})
+// Плоский конфиг ESLint 9 (Next 16: `next lint` удалён, пресеты
+// eslint-config-next — плоские массивы, FlatCompat больше не нужен;
+// образец — соседняя Казанская на 16.3.5).
+import nextCoreWebVitals from 'eslint-config-next/core-web-vitals'
+import nextTypescript from 'eslint-config-next/typescript'
 
 const eslintConfig = [
-  ...compat.extends('next/core-web-vitals', 'next/typescript'),
+  ...nextCoreWebVitals,
+  ...nextTypescript,
   {
     rules: {
       // Собственные правила подняты до 'error' (ревизия гейтов #104): в 'warn'
-      // next lint на них возвращал 0 — как гейт они были пустышкой.
+      // линтер на них возвращал 0 — как гейт были пустышкой.
       // Красные прогоны показаны: ban-ts-comment/any/unused — нарочно внесённые
       // нарушения падают с exit 1, откачено.
       '@typescript-eslint/ban-ts-comment': 'error',
