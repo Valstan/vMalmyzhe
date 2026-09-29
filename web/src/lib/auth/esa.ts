@@ -8,6 +8,13 @@
 // Этот файл — только конфиг и redirect_uri: строка, которую код отдаёт байт в
 // байт, сверяется Сарафаном тремя посимвольными сравнениями без нормализации
 // (письмо brain 25.08). Сам поток (start/callback/сессия) — следующим PR.
+import { ESA_ISSUER_DEFAULT as ESA_ISSUER_DEFAULT_SRC, normalizeUrl as normalizeUrlSrc } from '../securityHeaders.mjs'
+
+// Issuer ЕСА и нормализация живут в `lib/securityHeaders.mjs` (plain ESM):
+// тот же модуль импортирует `next.config.js` для CSP `form-action` (G311).
+// Реэкспорт — чтобы существующие импорты из `./esa` не разъехались.
+export const ESA_ISSUER_DEFAULT: string = ESA_ISSUER_DEFAULT_SRC
+export const normalizeUrl: (raw: string) => string | null = normalizeUrlSrc
 
 export type EsaConfig = {
   issuer: string
@@ -16,12 +23,11 @@ export type EsaConfig = {
   redirectUri: string
 }
 
-// Issuer ЕСА — вход.вмалмыже.рф. В коде только punycode (G133): кириллический
-// хост в сравнении молча не совпадёт, а в CI-bash ещё и бьётся.
+// Issuer ЕСА — вход.вмалмыже.рф — и нормализация URL живут в
+// `lib/securityHeaders.mjs` (см. выше): один экземпляр на конфиг и CSP.
 // Экспорт — ради одного экземпляра: тот же origin нужен CSP `form-action`
-// (`lib/securityHeaders.ts` → `next.config.ts`), которая фиксируется на сборке
-// (G311). Два места, не импортирующие друг друга, однажды разойдутся.
-export const ESA_ISSUER_DEFAULT = 'https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai'
+// (`next.config.js`), которая фиксируется на сборке (G311). Два места, не
+// импортирующие друг друга, однажды разойдутся.
 
 // Открытый идентификатор клиента, выданный Сарафаном 25.08.
 const ESA_CLIENT_ID_DEFAULT = 'portal'
@@ -37,15 +43,7 @@ export const ESA_SECRET_NAME = 'ESA_CLIENT_SECRET_PORTAL'
 // «https://вмалмыже.рф» и «https://xn--80adkdyec4j.xn--p1ai» дают одну строку.
 // Хвостовой слэш снимаем только у корня (`new URL('https://h').href` → `https://h/`),
 // у пути его не трогаем: redirect_uri сравнивается без нормализации.
-export const normalizeUrl = (raw: string): string | null => {
-  try {
-    const u = new URL(raw)
-    if (u.search || u.hash) return null
-    return u.pathname === '/' ? u.origin : u.origin + u.pathname
-  } catch {
-    return null
-  }
-}
+// (Реализация — `normalizeUrl` из `lib/securityHeaders.mjs`, см. выше.)
 
 // redirect_uri, который портал отдаёт в authorize и token. Чистая функция —
 // тест фиксирует точную строку, та же строка уходит Сарафану письмом.

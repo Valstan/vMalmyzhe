@@ -17,7 +17,11 @@ export function PostGallery() {
   const [items, setItems] = useState<MediaItem[]>([])
   const [index, setIndex] = useState<number | null>(null)
   const itemsRef = useRef<MediaItem[]>([])
-  itemsRef.current = items
+  // Свежая ссылка для обработчика клавиатуры: ref пишем в эффекте, а не в
+  // рендере (react-hooks v6 запрещает доступ к ref во время рендера).
+  useEffect(() => {
+    itemsRef.current = items
+  })
 
   useEffect(() => {
     const root = rootRef.current?.closest('article')

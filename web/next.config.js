@@ -2,18 +2,20 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 import { withPayload } from '@payloadcms/next/withPayload'
-import type { NextConfig } from 'next'
 
-import { buildSecurityHeaders } from './src/lib/securityHeaders'
+import { buildSecurityHeaders } from './src/lib/securityHeaders.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const NEXT_PUBLIC_SERVER_URL =
   process.env.NEXT_PUBLIC_SERVER_URL || process.env.__NEXT_PRIVATE_ORIGIN || 'http://localhost:3004'
 
-// .ts, а не .mjs (с 12.09): конфиг импортирует origin ЕСА из того же модуля,
-// что и рантайм, чтобы CSP `form-action` и OIDC-клиент не разошлись (G311).
-const nextConfig: NextConfig = {
+// .js, а не .ts: Next 16 не грузит next.config.ts с импортами (компилятор
+// отдаёт CJS `exports` в ESM-скоуп — проверено бисекцией 29.09). Single-source
+// с рантаймом сохранён: origin ЕСА и сборка заголовков живут в
+// `src/lib/securityHeaders.mjs`, который импортируют и конфиг, и TS-код (G311).
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   // Позволяет агентам и локальным проверкам запускать изолированную сборку,
   // не мешая уже работающему dev-серверу соседнего проекта.
   distDir: process.env.NEXT_DIST_DIR || '.next',
@@ -33,7 +35,7 @@ const nextConfig: NextConfig = {
         const url = new URL(item)
         return {
           hostname: url.hostname,
-          protocol: url.protocol.replace(':', '') as 'http' | 'https',
+          protocol: url.protocol.replace(':', ''),
         }
       }),
     ],
@@ -43,7 +45,7 @@ const nextConfig: NextConfig = {
   // сканеру, а он и так стучит (журнал 12.09).
   poweredByHeader: false,
   // Заголовки безопасности — на все маршруты, включая /admin и /api.
-  // Значение фиксируется на сборке: см. lib/securityHeaders.ts.
+  // Значение фиксируется на сборке: см. lib/securityHeaders.mjs.
   headers: async () => [{ source: '/(.*)', headers: buildSecurityHeaders() }],
 }
 

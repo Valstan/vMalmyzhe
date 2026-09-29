@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import React from 'react'
+import React, { Suspense } from 'react'
 
 import { METRIKA_ID } from '../../../lib/metrika'
 import { AUTHOR_CREDIT, AUTHOR_URL, CONTACTS, SERVICES_CATALOG_URL, SITE_NAME } from '../../../lib/site'
@@ -45,8 +45,12 @@ export function SiteChrome({
           <span className="utility-bar__message">Всё важное — рядом</span>
           <a href="tel:112">Экстренные службы: 112</a>
           {/* Вход через ЕСА вМалмыже.рф (mandate 26.07). Рендерится только
-              когда вход включён на сервере — см. AuthBadge. */}
-          <AuthBadge />
+              когда вход включён на сервере — см. AuthBadge. Suspense обязателен:
+              AuthBadge читает useSearchParams, без границы статичный пререндер
+              страницы падает на сборке (Next 16). */}
+          <Suspense>
+            <AuthBadge />
+          </Suspense>
         </div>
       </div>
       <header className="site-header">
