@@ -27,3 +27,16 @@ export const SERVICES_CATALOG_URL = 'https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1
 // Живой домен — валентин.вмалмыже.рф (прод с 02.08).
 export const AUTHOR_URL = 'https://xn--80adkmnnb2b.xn--80adkdyec4j.xn--p1ai/'
 export const AUTHOR_CREDIT = 'Студия «Матрица» - Валентин Савиных'
+
+// Публичные контакты организации (решение владельца 29.09: взять из Портфолио,
+// состав подтверждён владельцем 2026-08-02). Используются в JSON-LD (sameAs /
+// telephone / email), блоке «Контакты организации» в llms.txt и фолбэке подвала.
+// Уличного адреса нет — только место в areaServed (см. SiteJsonLd).
+export const CONTACTS = {
+  phone: '+79229005910',
+  phoneLabel: '+7 922 900-59-10',
+  telegram: 'https://t.me/VAL_STAN',
+  telegramLabel: '@VAL_STAN',
+  email: 'valstan@valstan.ru',
+  github: 'https://github.com/Valstan',
+} as const

@@ -17,5 +17,8 @@ export default async function NewsPageN({ params }: Args) {
 
 export async function generateMetadata({ params }: Args): Promise<Metadata> {
   const { n } = await params
-  return { title: `Новости — страница ${n}` }
+  return {
+    title: `Новости — страница ${n}`,
+    description: `Новости Малмыжа и Малмыжского района — страница ${n}.`,
+  }
 }
