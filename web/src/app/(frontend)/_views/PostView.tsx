@@ -7,7 +7,7 @@ import { getPayload } from 'payload'
 import { notFound } from 'next/navigation'
 
 import { jsonLdHtml } from '../../../lib/jsonLd'
-import { extractText } from '../../../lib/lexicalText'
+import { extractText, metaDescription } from '../../../lib/lexicalText'
 import { SITE_NAME, SITE_URL } from '../../../lib/site'
 import { degraded, withRetry } from '../../../lib/withRetry'
 import { RichText } from '../../../lib/RichText'
@@ -60,7 +60,7 @@ export async function postMeta(slug: string): Promise<Metadata> {
     const post = await getPost(decodeURIComponent(slug))
     if (!post) return {}
     const cover = typeof post.cover === 'object' && post.cover ? (post.cover as MediaDoc) : null
-    const description = extractText(post.content) || undefined
+    const description = metaDescription(post.content)
     const path = `/news/${encodeURIComponent(post.slug ?? '')}`
     return {
       title: post.title || SITE_NAME,
