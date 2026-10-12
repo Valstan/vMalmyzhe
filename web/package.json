@@ -63,9 +63,9 @@
       "immutable@>=4": ">=4.3.9",
       "postcss@>=8": ">=8.5.18",
       "nanoid@>=3 <4": ">=3.3.18",
-      "undici": ">=7.29.1",
-      "source-map-js": ">=1.2.2",
-      "chokidar": ">=4.0.0"
+      "undici": "7.29.1",
+      "source-map-js": "1.2.2",
+      "chokidar": "4.0.3"
     }
   }
 }
