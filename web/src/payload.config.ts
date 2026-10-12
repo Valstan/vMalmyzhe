@@ -38,6 +38,9 @@ export default buildConfig({
     // на этапе деплоя (web/src/migrations/).
     push: true,
   }),
+  // G339: cookiePrefix с префиксом __Host- для защиты от подброса cookie
+  // соседями поддоменов. Браузер требует Secure + Path=/ + без Domain.
+  cookiePrefix: '__Host-payload',
   collections: [Pages, Posts, Sections, Banners, Media, Users],
   globals: [HomeContent, SiteHeader, SiteFooter],
   // Email-уведомления (опционально). Провайдеро-независимо: любой внешний SMTP-relay
