@@ -1,6 +1,5 @@
 // Плоский конфиг ESLint 9 (Next 16: `next lint` удалён, пресеты
-// eslint-config-next — плоские массивы, FlatCompat больше не нужен;
-// образец — соседняя Казанская на 16.3.5).
+// eslint-config-next 16.3.5 — flat config массивы в dist/ (exports map).
 import nextCoreWebVitals from 'eslint-config-next/core-web-vitals'
 import nextTypescript from 'eslint-config-next/typescript'
 

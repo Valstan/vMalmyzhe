@@ -5,7 +5,6 @@ import { ESA_SECRET_NAME, getEsaConfig } from '../../../lib/auth/esa'
 import {
   SESSION_COOKIE,
   SESSION_COOKIE_ATTRS,
-  SESSION_COOKIE_LEGACY,
 } from '../../../lib/auth/session'
 import { ensureSecret } from '../../../lib/secretsVault'
 
@@ -34,10 +33,9 @@ export const clearTxCookie = (res: NextResponse): void => {
   res.cookies.set(TX_COOKIE, '', { path: TX_COOKIE_PATH, maxAge: 0 })
 }
 
-// Гасим оба имени. `__Host-` — явной перезаписью с теми же атрибутами, что при
-// установке: `.delete()` фреймворка без `Secure` браузер отвергнет, и сессия
+// Гасим сессию: `__Host-` — явной перезаписью с теми же атрибутами, что при
+// установке. `.delete()` фреймворка без `Secure` браузер отвергнет, и сессия
 // переживёт «Выйти» (письмо brain 05.09).
 export const clearSessionCookie = (res: NextResponse): void => {
   res.cookies.set(SESSION_COOKIE, '', { ...SESSION_COOKIE_ATTRS, maxAge: 0 })
-  res.cookies.set(SESSION_COOKIE_LEGACY, '', { path: '/', maxAge: 0 })
 }

@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   SESSION_COOKIE,
   SESSION_COOKIE_ATTRS,
-  SESSION_COOKIE_LEGACY,
   SESSION_MAX_AGE_S,
   openSession,
   publicProfile,
@@ -58,16 +57,14 @@ describe('publicProfile — без sub и exp', () => {
 })
 
 describe('имя cookie — __Host- (#285)', () => {
-  it('новое имя с префиксом; атрибуты, без которых браузер префикс отвергнет', () => {
+  it('имя с префиксом; атрибуты, без которых браузер префикс отвергнет', () => {
     expect(SESSION_COOKIE).toBe('__Host-vm_resident')
-    expect(SESSION_COOKIE_LEGACY).toBe('vm_resident')
     expect(SESSION_COOKIE_ATTRS).toMatchObject({ secure: true, path: '/', httpOnly: true })
     expect('domain' in SESSION_COOKIE_ATTRS).toBe(false)
   })
-  it('читаем оба имени, новое в приоритете', () => {
+  it('читаем только новое имя', () => {
     const jar = (j: Record<string, string>) => (n: string) => j[n]
-    expect(readSessionCookie(jar({ [SESSION_COOKIE]: 'new', [SESSION_COOKIE_LEGACY]: 'old' }))).toBe('new')
-    expect(readSessionCookie(jar({ [SESSION_COOKIE_LEGACY]: 'old' }))).toBe('old')
+    expect(readSessionCookie(jar({ [SESSION_COOKIE]: 'value' }))).toBe('value')
     expect(readSessionCookie(jar({}))).toBeUndefined()
   })
 })
