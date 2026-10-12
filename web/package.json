@@ -64,7 +64,6 @@
       "postcss@>=8": ">=8.5.18",
       "nanoid@>=3 <4": ">=3.3.18",
       "undici": ">=7.29.1",
-      "nodemailer": ">=10.0.6",
       "source-map-js": ">=1.2.2",
       "chokidar": ">=4.0.0"
     }
