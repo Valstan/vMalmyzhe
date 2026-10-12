@@ -18,5 +18,13 @@ public/media/*
 public/robots.txt
 public/sitemap*.xml
 
-# TypeScript build cache
-*.tsbuildinfo
+# Generated font files with content hashes (source in src/fonts/)
+public/fonts/*.[a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9].ttf
+
+# Next.js build output
+.next
+.next-codex
+out
+dist
+.output
+next-env.d.ts
