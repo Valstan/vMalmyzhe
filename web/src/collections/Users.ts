@@ -26,7 +26,15 @@ export const Users: CollectionConfig = {
     defaultColumns: ['name', 'email', 'roles'],
     useAsTitle: 'name',
   },
-  auth: true,
+  // G339: auth.cookies для __Host- префикса — Secure + SameSite=Lax + без Domain.
+  // cookiePrefix='__Host-payload' задаётся в payload.config.ts → итоговая cookie
+  // '__Host-payload-token'. Браузер принимает только с Secure + Path=/.
+  auth: {
+    cookies: {
+      secure: true,
+      sameSite: 'Lax',
+    },
+  },
   fields: [
     {
       name: 'name',
