@@ -1,4 +1,5 @@
 import { postgresAdapter } from '@payloadcms/db-postgres'
+import type { NodemailerAdapterArgs } from '@payloadcms/email-nodemailer'
 import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import sharp from 'sharp'
@@ -18,6 +19,20 @@ import { SiteFooter } from './globals/SiteFooter'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
+
+// Тип опций транспорта — от Payload-адаптера, с добавлением `auth`.
+// `nodemailerAdapter` объявляет `transportOptions` как `SMTPConnection.Options`,
+// но в nodemailer 10 (единственная ветка без CVE в addressparser) `auth`
+// переехал из `SMTPConnectionOptions` в `SMTPTransportOptions`. Адаптер передаёт
+// объект прямо в `createTransport`, чья подпись — `SMTPTransportOptions`, то есть
+// `auth` законен и на рантайме, и по типам самого nodemailer. Аннотация Payload
+// (3.90.1) устарела; правим её локальным cast, а не откатом на уязвимую ветку.
+// Откат невозможен: патча в ветке 9 нет (последняя — 9.1.1, advisory покрывает
+// <=10.0.5). Сам `nodemailer` импортировать нельзя — он не прямой зависимость,
+// а deep-пути (`nodemailer/lib/*`) закрыты `exports`-картой без условия `types`.
+type SmtpTransportOptions = NonNullable<NodemailerAdapterArgs['transportOptions']> & {
+  auth?: { user?: string; pass?: string }
+}
 
 export default buildConfig({
   admin: {
@@ -62,7 +77,7 @@ export default buildConfig({
             user: process.env.SMTP_USER,
             pass: process.env.SMTP_PASS,
           },
-        },
+        } as SmtpTransportOptions,
       })
     : undefined,
   cors: [process.env.NEXT_PUBLIC_SERVER_URL || ''].filter(Boolean),
