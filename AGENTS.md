@@ -114,6 +114,15 @@ urgency: low | normal | high
   вслепую: проверять SQL и drizzle-снапшот.
 - Секреты живут вне репо (#008): прод — prod-env бокса (подключается systemd через
   `EnvironmentFile=`), локально — `web/.env`. Шаблон — `web/.env.example`.
+- **Комната КАРМАНа `vmalmyzhe`:** токен — в prod-env как `SECRETS_TOKEN`, адрес —
+  `SECRETS_VAULT_URL` (в GitHub Secrets токена нет); что и как —
+  `brain_matrica/docs/KARMAN_ROOM.md`. В комнате лежат: `PAYLOAD_SECRET`,
+  `GATEWAY_KEY_VMALMYZHE`, `INGEST_PUBLISH_KEY` (зеркало шага деплоя, эхо sha256
+  сверено) и `ESA_CLIENT_SECRET_PORTAL` (в комнате `setka`, виден по grant'у).
+  ⚠️ Право токена на боксе — **read-write**: проверено деплоем 12.10
+  (`POST /api/secrets` → 200), это шире канона «на бокс только read-only»;
+  сужение до read-only требует паспортного зеркала (ADR-0012). Дата решения — в
+  `docs/SESSION_HANDOFF.md`.
 - **Сканер секретов** (gitleaks) — шаг внутри `gates` на каждом PR (`.gitleaks.toml`:
   дефолт + VK/Telegram/наши env-имена/postgres-URI). Красный показан 23.08 (PR #45).
   Нашёл секрет в истории — **сначала отозвать у эмитента**, потом чистить файл;
