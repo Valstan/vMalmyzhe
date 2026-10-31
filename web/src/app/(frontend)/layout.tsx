@@ -4,7 +4,7 @@ import { getPayload } from 'payload'
 import React from 'react'
 
 import './globals.css'
-import { SITE_DESC, SITE_NAME, SITE_TITLE_HOME, SITE_URL } from '../../lib/site'
+import { RSS_ALTERNATES, SITE_DESC, SITE_NAME, SITE_TITLE_HOME, SITE_URL } from '../../lib/site'
 import { degraded, withRetry } from '../../lib/withRetry'
 import type { ChromeContent, NavItem } from './components/SiteChrome'
 import { SiteChrome } from './components/SiteChrome'
@@ -17,10 +17,13 @@ export const metadata: Metadata = {
     template: `%s — ${SITE_NAME}`,
   },
   description: SITE_DESC,
+  // canonical здесь НЕ ставим: в layout он достаётся всем страницам сразу, и
+  // /news, /news/page/N и /pages/* объявляли канонической главную — Яндекс
+  // считал их дублями главной (Вебмастер, «Неканоническая», 31.10). Каждая
+  // страница объявляет свой адрес сама.
   alternates: {
-    canonical: '/',
     // Чтобы агрегаторы и краулеры находили ленту без угадывания адреса.
-    types: { 'application/rss+xml': `${SITE_URL}/rss.xml` },
+    types: RSS_ALTERNATES,
   },
   openGraph: {
     title: SITE_NAME,

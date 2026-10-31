@@ -33,7 +33,12 @@ export async function pageMeta(slug: string): Promise<Metadata> {
     // Description из первого абзаца — иначе страница наследует общий SITE_DESC
     // и Вебмастер видит дубли (замечание 29.09, D-088 п.3). Пусто — явный
     // фолбэк SITE_DESC (мандат 01.10, Р1).
-    return { title: page.title || SITE_NAME, description: metaDescription(page.content) }
+    return {
+      title: page.title || SITE_NAME,
+      description: metaDescription(page.content),
+      // Свой адрес: без него страница объявляла канонической главную (31.10).
+      alternates: { canonical: `/pages/${encodeURIComponent(slug)}` },
+    }
   } catch (err) {
     return degraded('PageView/pageMeta', {}, err)
   }
