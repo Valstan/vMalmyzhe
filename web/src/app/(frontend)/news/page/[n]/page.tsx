@@ -20,5 +20,7 @@ export async function generateMetadata({ params }: Args): Promise<Metadata> {
   return {
     title: `Новости — страница ${n}`,
     description: `Новости Малмыжа и Малмыжского района — страница ${n}.`,
+    // Свой адрес: без него страница объявляла канонической главную (31.10).
+    alternates: { canonical: `/news/page/${n}` },
   }
 }
