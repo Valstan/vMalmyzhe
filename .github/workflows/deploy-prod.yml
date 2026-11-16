@@ -260,7 +260,7 @@ jobs:
           VAULT="${VAULT%/}"; case "$VAULT" in */api/secrets) ;; *) VAULT="$VAULT/api/secrets" ;; esac
 
           # Якорь: новый СВОЙ секрет в .env.example → добавить и сюда.
-          NAMES="PAYLOAD_SECRET GATEWAY_KEY_VMALMYZHE INGEST_PUBLISH_KEY SARAFAN_GATEWAY_KEY"
+          NAMES="PAYLOAD_SECRET GATEWAY_KEY_VMALMYZHE INGEST_PUBLISH_KEY SARAFAN_GATEWAY_KEY PROMPTS_TOKEN_VMALMYZHE"
           umask 077; TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
           # Пары «имя<TAB>значение» на stdin jq — без eval и без подстановки в
           # строку: значение с пробелом, кавычкой или $ ничего не ломает и в
