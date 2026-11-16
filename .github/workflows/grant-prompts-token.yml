@@ -1,0 +1,194 @@
+name: Grant prompts token
+
+# Выдача токена РАЗДЕЛА промтов в комнату, из которой читается
+# `/api/prompts/section` (мандат brain от 08.11 + errata от 09.11 и 12.11).
+#
+# Механика приёма (erratum №2 от 12.11, подтверждено на бою): кнопки «Принять»
+# нет ни у комнаты-источника, ни у комнаты-получателя. Правильный порядок:
+#   1) объявить политику приёма в комнате-получателе — это делает владелец;
+#   2) перепредложить выдачу — новая уходит сразу в `active`;
+#   3) отозвать старое висшее предложение — иначе оно путает в интерфейсе.
+# Политика НЕ действует задним числом: старое предложение после её объявления
+# остаётся `pending`, поэтому «просто подождать» не работает.
+#
+# Адресат выводится из НАШЕЙ выдачи — targetSlug уже предложения по этому ключу
+# (GET /api/secrets/grants от имени своей комнаты). Slug чужой комнаты в
+# репозиторий не попадает: репозиторий публичный (D-038).
+#
+# Значения секретов не печатаются: комнатный токен берётся из prod-env на боксе,
+# токен раздела читается из комнаты и уходит в curl через конфиг-файл — в argv
+# не попадает. В лог идут только коды, состояния, id и slug.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'status — показать; propose — перепредложить выдачу; revoke — отозвать по id; verify — проба раздела'
+        required: true
+        default: 'status'
+        type: choice
+        options: [status, propose, revoke, verify]
+      grant_id:
+        description: 'id выдачи для revoke'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  grant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ] || [ -z "$DEPLOY_SSH_USER" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / secrets.DEPLOY_SSH_USER"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_vmalmyzhe
+          chmod 600 ~/.ssh/id_ed25519_vmalmyzhe
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host vmalmyzhe
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User $DEPLOY_SSH_USER
+            IdentityFile ~/.ssh/id_ed25519_vmalmyzhe
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+          # G315: ssh/scp при отказе связи печатают хост и порт отдельными словами,
+          # маскировка секретов их не ловит, а репо публичный. Обёртка глушит
+          # stderr клиента; удалённый скрипт печатает диагностику в stdout
+          # (exec 2>&1 первой строкой), код 255 объясняем словами.
+          cat > ~/.ssh/quiet <<'SH'
+          #!/usr/bin/env bash
+          "$@" 2>/dev/null
+          rc=$?
+          [ "$rc" = 255 ] && echo "::error::$1 не соединился с боксом (код 255); хост и порт не печатаем"
+          exit "$rc"
+          SH
+          chmod 700 ~/.ssh/quiet
+
+      - name: Выдача (с бокса, токеном своей комнаты, без значений)
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+          MODE: ${{ inputs.mode }}
+          GRANT_ID: ${{ inputs.grant_id }}
+        run: |
+          set -eo pipefail
+          # G321: ssh склеивает аргументы в строку — пустой исчезает и сдвигает
+          # позиционные параметры на боксе. Пустой аргумент — стоп до ssh.
+          [ -n "$PROD_ENV_FILE" ] || { echo "::error::PROD_ENV_FILE пуст — на бокс не идём"; exit 1; }
+          [ -n "$MODE" ] || { echo "::error::MODE пуст — на бокс не идём"; exit 1; }
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" "$MODE" "${GRANT_ID:-0}" <<'REMOTE'
+          exec 2>&1
+          set -eo pipefail
+          ENV_FILE="$1"; MODE="$2"; GRANT_ID="$3"
+          KEY=PROMPTS_TOKEN_VMALMYZHE
+          PROJECT=vMalmyzhe
+
+          val() { local out; out=$(sudo -n grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1) || out=""; out="${out#*=}"; printf '%s' "$out" | sed 's/^"\(.*\)"$/\1/'; }
+          TOKEN=$(val SECRETS_TOKEN); VAULT=$(val SECRETS_VAULT_URL)
+          [ -n "$TOKEN" ] || { echo "::error::SECRETS_TOKEN в prod-env нет"; exit 1; }
+          [ -n "$VAULT" ] || { echo "::error::SECRETS_VAULT_URL в prod-env нет"; exit 1; }
+          VAULT="${VAULT%/}"
+
+          TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
+          umask 077
+
+          grants() {
+            curl -sf --max-time 15 -H "Authorization: Bearer $TOKEN" "$VAULT/api/secrets/grants"
+          }
+
+          show() {
+            grants | jq -r '"issued:", (.issued[]? | "  #\(.id) \(.sourceKey) -> \(.targetSlug) as \(.aliasKey // .sourceKey) [\(.state)] accepted=\(.acceptedAt // "-") revoked=\(.revokedAt // "-")"),
+                            "received:", (.received[]? | "  #\(.id) \(.aliasKey) <- \(.sourceSlug) [\(.state)]")'
+          }
+
+          # Адресат — из нашей же выдачи по этому ключу. Никаких чужих slug в коде.
+          target_slug() {
+            grants | jq -r --arg k "$KEY" '[.issued[]? | select(.sourceKey == $k and (.revokedAt == null))] | (.[0].targetSlug // empty)'
+          }
+
+          # Проба раздела токеном: значение читается из комнаты и уходит в curl
+          # через конфиг-файл — в argv не попадает.
+          probe_section() {
+            curl -sf --max-time 15 -H "Authorization: Bearer $TOKEN" "$VAULT/api/secrets?key=$KEY" \
+              | jq -r --arg k "$KEY" '.secrets[$k] // empty' > "$TMPD/value"
+            if [ ! -s "$TMPD/value" ]; then
+              echo "::error::токена раздела в комнате нет — канал не выпущен"
+              return 1
+            fi
+            {
+              printf 'header = "Authorization: Bearer '
+              tr -d '\n' < "$TMPD/value"
+              printf '"\n'
+              printf 'url = "%s/api/prompts/section?project=%s"\n' "$VAULT" "$PROJECT"
+              printf 'silent\n'
+              printf 'output = "%s"\n' "$TMPD/section.json"
+              printf 'write-out = "%%{http_code}"\n'
+              printf 'max-time = 15\n'
+            } > "$TMPD/curlcfg"
+            CODE=$(curl -K "$TMPD/curlcfg")
+            echo "GET /api/prompts/section?project=$PROJECT -> HTTP $CODE"
+            case "$CODE" in
+              200) echo "канал живой: раздел читается" ;;
+              503) echo "503 — канал не настроен: политика приёма в комнате-получателе не объявлена (или выдача ещё pending)" ;;
+              403) echo "403 — токен не от того раздела" ;;
+              404) echo "404 — раздела для проекта нет" ;;
+              *)   echo "ответ: $(head -c 200 "$TMPD/section.json" 2>/dev/null | tr -d '\n')" ;;
+            esac
+            return 0
+          }
+
+          case "$MODE" in
+            status)
+              echo "наша комната:"
+              curl -s --max-time 15 -H "Authorization: Bearer $TOKEN" "$VAULT/api/secrets/self" | jq -c '{slug,canWrite}'
+              echo "выдачи:"
+              show
+              probe_section
+              ;;
+            propose)
+              TARGET=$(target_slug)
+              [ -n "$TARGET" ] || { echo "::error::нет нашей выдачи по ключу $KEY — адресат неизвестен, сначала создай выдачу вручную"; exit 1; }
+              NOTE="Токен раздела промтов vMalmyzhe — проект забирает свой раздел и архивирует выполненное (мандат 2026-11-08)"
+              jq -n --arg k "$KEY" --arg t "$TARGET" --arg a "$KEY" --arg n "$NOTE" \
+                '{key:$k,target_slug:$t,alias:$a,note:$n}' > "$TMPD/body.json"
+              CODE=$(curl -s -o "$TMPD/grant.json" -w '%{http_code}' --max-time 15 -X POST "$VAULT/api/secrets/grants" \
+                -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' --data-binary @"$TMPD/body.json")
+              echo "перепредложение: HTTP $CODE"
+              case "$CODE" in
+                201) jq -c '{id,state}' "$TMPD/grant.json" ;;
+                409) echo "409 — такая выдача уже есть; новое предложение не создано" ;;
+                403) echo "::error::403 — токен комнаты не пишет"; exit 1 ;;
+                404) echo "::error::404 — комната-получатель не найдена"; exit 1 ;;
+                *)   echo "::error::HTTP $CODE"; exit 1 ;;
+              esac
+              show
+              probe_section
+              ;;
+            revoke)
+              [ "$GRANT_ID" != "0" ] || { echo "::error::revoke без grant_id"; exit 1; }
+              curl -sf --max-time 15 -X DELETE "$VAULT/api/secrets/grants" \
+                -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+                --data-binary "$(jq -n --argjson id "$GRANT_ID" '{id:$id}')" | jq -c .
+              show
+              ;;
+            verify)
+              probe_section
+              ;;
+            *) echo "::error::неизвестный mode $MODE"; exit 1 ;;
+          esac
+          REMOTE
