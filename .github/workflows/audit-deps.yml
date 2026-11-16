@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pnpm audit --prod --audit-level=low 2>&1 | tee audit.txt
+          pnpm audit --prod --audit-level=high 2>&1 | tee audit.txt
           rc=${PIPESTATUS[0]}
           echo "## pnpm audit --prod --audit-level=high" >> "$GITHUB_STEP_SUMMARY"
           tail -n 3 audit.txt >> "$GITHUB_STEP_SUMMARY"
@@ -92,7 +92,7 @@ jobs:
             echo "- Прогон: ${RUN_URL}"
             echo "- Коммит: \`${COMMIT_SHA}\`"
             echo "- Дата: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "- Сработало по расписанию, адресата у провала не было."
+            echo "- Прогон вне PR: у провала на PR адресат есть — сам PR."
             echo
             echo "## Что именно красное"
             echo
