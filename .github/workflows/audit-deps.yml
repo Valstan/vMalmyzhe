@@ -27,6 +27,12 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    # issues: write — шагу «Открыть issue при красном аудите» нужно право создать
+    # issue. На уровне шага `permissions` не поддерживается (GitHub отвергает файл:
+    # «Unexpected value 'permissions'»), поэтому право даётся job'у целиком.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v5
 
@@ -67,9 +73,6 @@ jobs:
       # Issue открывается там, где адресата не было, — на расписании.
       - name: Открыть issue при красном аудите
         if: failure() && github.event_name != 'pull_request'
-        permissions:
-          contents: read
-          issues: write
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
