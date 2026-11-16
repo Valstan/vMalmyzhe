@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pnpm audit --prod --audit-level=high 2>&1 | tee audit.txt
+          pnpm audit --prod --audit-level=low 2>&1 | tee audit.txt
           rc=${PIPESTATUS[0]}
           echo "## pnpm audit --prod --audit-level=high" >> "$GITHUB_STEP_SUMMARY"
           tail -n 3 audit.txt >> "$GITHUB_STEP_SUMMARY"
