@@ -52,3 +52,69 @@ jobs:
           tail -n 3 audit.txt >> "$GITHUB_STEP_SUMMARY"
           [ "$rc" = 0 ] || echo "::error::в прод-зависимостях есть уязвимости уровня high/critical — обновить отдельным PR"
           exit "$rc"
+
+      # Грабля G547: «проверка по расписанию» = «кто-то узнаёт о провале».
+      # Реальный случай: плановая проверка была красной с 29.10 по 01.11 (run
+      # 40865922015) — 2 critical + 8 high в прод-зависимостях, и никто об этом
+      # не узнал, пока прогоны не посмотрели глазами. Расписание без адресата
+      # охраняет не файлы, а квоту: тратит прогоны и молчит.
+      #
+      # Поэтому красный порождает внешний след — issue в своём репо (директива
+      # владельца от 05.11). В issue идут ФАКТЫ (что именно красное: пакет,
+      # версия, severity, advisory), а не «проверка упала».
+      #
+      # Только для запусков не из PR: у провала на PR адресат есть — сам PR.
+      # Issue открывается там, где адресата не было, — на расписании.
+      - name: Открыть issue при красном аудите
+        if: failure() && github.event_name != 'pull_request'
+        permissions:
+          contents: read
+          issues: write
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd web
+
+          # Факты — из вывода того же аудита, который уже лёг в audit.txt.
+          # Разбор не нужен: сам вывод pnpm — это перечень уязвимых пакет.
+          sed -r 's/\x1B\[[0-9;]*[mK]//g' audit.txt > audit.clean.txt || true
+
+          {
+            echo "Красный аудит прод-зависимостей (\`pnpm audit --prod --audit-level=high\`)."
+            echo
+            echo "- Прогон: ${RUN_URL}"
+            echo "- Коммит: \`${COMMIT_SHA}\`"
+            echo "- Дата: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- Сработало по расписанию, адресата у провала не было."
+            echo
+            echo "## Что именно красное"
+            echo
+            echo '```text'
+            cat audit.clean.txt
+            echo '```'
+            echo
+            echo "Лечение — отдельным PR: обновить пакет до исправленной версии."
+            echo "Порог гейта — \`high\`; moderate и ниже не роняют."
+          } > issue-body.md
+
+          # Дедупликация: один открытый issue на класс проблемы, дальше — комментарии.
+          # Иначе расписание (пн и чт) засыпает репо issue'ами.
+          LABEL=audit-deps
+          gh label create "$LABEL" --color B60205 \
+            --description "Красный аудит прод-зависимостей (high+)" --force
+
+          EXISTING=$(gh issue list --label "$LABEL" --state open --limit 1 \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file issue-body.md
+            echo "::notice::Красный аудит — комментарий в issue #$EXISTING"
+          else
+            gh issue create --label "$LABEL" \
+              --title "Красный аудит прод-зависимостей — run ${GITHUB_RUN_NUMBER}" \
+              --body-file issue-body.md
+          fi
