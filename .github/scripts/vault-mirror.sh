@@ -18,7 +18,8 @@
 
 set -euo pipefail
 
-NAMES="${NAMES:-PAYLOAD_SECRET GATEWAY_KEY_VMALMYZHE INGEST_PUBLISH_KEY SARAFAN_GATEWAY_KEY PROMPTS_TOKEN_VMALMYZHE}"
+# Якорь: новый СВОЙ секрет в .env.example → добавить и сюда (список зеркала).
+NAMES_CSV="${NAMES_CSV:-PAYLOAD_SECRET,GATEWAY_KEY_VMALMYZHE,INGEST_PUBLISH_KEY,SARAFAN_GATEWAY_KEY,PROMPTS_TOKEN_VMALMYZHE}"
 
 die() { echo "::error::$1" >&2; exit 1; }
 warn() { echo "::warning::$1" >&2; }
@@ -74,9 +75,16 @@ echo "::add-mask::$SESSION_TOKEN"
 # ── 2. Значения с бокса — файлом, не через stdout ─────────────────────────────
 # Значения не печатаются: удалённый скрипт собирает их в файл 0600 и выдаёт
 # ТОЛЬКО путь. Путь — не секрет, его можно показать.
-BOX_FILE="$(ssh -o ConnectTimeout=15 "$DEPLOY_HOST" 'bash -s' "$PROD_ENV_FILE" "$NAMES" <<'REMOTE' 2>/dev/null
+#
+# ⚠️ Список имён едем ЗАПЯТЫМ (через запятую), а не пробелами: ssh склеивает
+# аргументы в одну строку и отдаёт её удалённому шеллу, который режет по
+# пробелам — пробельный список доехал бы только первым именем (поймала проба
+# 17.11, второй прогон). Запятые переживают склейку, а список разбирается уже
+# на боксе.
+BOX_FILE="$(ssh -o ConnectTimeout=15 "$DEPLOY_HOST" 'bash -s' "$PROD_ENV_FILE" "$NAMES_CSV" <<'REMOTE' 2>/dev/null
 set -euo pipefail
-ENV_FILE="$1"; NAMES="$2"
+ENV_FILE="$1"; NAMES_CSV="$2"
+NAMES="$(printf '%s' "$NAMES_CSV" | tr ',' ' ')"
 OUT="$(mktemp /tmp/vm-mirror.XXXXXX)"
 chmod 600 "$OUT"
 for NAME in $NAMES; do
