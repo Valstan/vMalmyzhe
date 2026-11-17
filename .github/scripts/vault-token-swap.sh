@@ -23,6 +23,9 @@ fail() { echo "::error::$1" >&2; exit 1; }
 
 [ -s "$CODE_FILE" ] || fail "файл с кодом пуст"
 CODE="$(tr -d '\r\n' < "$CODE_FILE")"
+# BOM (EF BB BF) в начало — тоже мусор: он попадёт в заголовок curl и код станет
+# неверным. Снимаем на входе, чтобы файл можно было класть любым способом.
+CODE="${CODE#$'\xEF\xBB\xBF'}"
 
 set -a; . "$ENV_FILE"; set +a
 TOKEN_OLD="${SECRETS_TOKEN:-}"
