@@ -119,10 +119,15 @@ urgency: low | normal | high
   `brain_matrica/docs/KARMAN_ROOM.md`. В комнате лежат: `PAYLOAD_SECRET`,
   `GATEWAY_KEY_VMALMYZHE`, `INGEST_PUBLISH_KEY` (зеркало шага деплоя, эхо sha256
   сверено) и `ESA_CLIENT_SECRET_PORTAL` (в комнате `setka`, виден по grant'у).
+  **Зеркало и выдачи — паспортом** (ADR-0012, форма Б): запись в комнату идёт
+  сессией, открытой по удостоверению прогона (OIDC), а не комнатным токеном с
+  бокса; скрипты — `.github/scripts/vault-mirror.sh`, `vault-grant.sh`,
+  `vault-prompts-section.sh`, проба — workflow `Vault mirror check`.
   ⚠️ Право токена на боксе — **read-write**: проверено деплоем 12.10
-  (`POST /api/secrets` → 200), это шире канона «на бокс только read-only»;
-  сужение до read-only требует паспортного зеркала (ADR-0012). Дата решения — в
-  `docs/SESSION_HANDOFF.md`.
+  (`POST /api/secrets` → 200), это шире канона «на бокс только read-only».
+  Паспортный путь подготовлен (16.11); **сужение до read-only — шаг владельца**
+  (выпустить ro-токен в интерфейсе КАРМАНА, положить на бокс, отозвать rw) —
+  состояние и дата в `docs/SESSION_HANDOFF.md`.
 - **Сканер секретов** (gitleaks) — шаг внутри `gates` на каждом PR (`.gitleaks.toml`:
   дефолт + VK/Telegram/наши env-имена/postgres-URI). Красный показан 23.08 (PR #45).
   Нашёл секрет в истории — **сначала отозвать у эмитента**, потом чистить файл;
