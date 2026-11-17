@@ -37,6 +37,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # id-token — паспорт КАРМАНа (ADR-0012): зеркало секретов в комнату пишет
+    # сессия, открытая по удостоверению прогона. Так комнатный токен на боксе
+    # может остаться read-only (канон: «на бокс кладём только read-only;
+    # пишущий не кладём»).
+    permissions:
+      contents: read
+      id-token: write
 
     services:
       postgres:
@@ -218,114 +225,28 @@ jobs:
       # Шаг не блокирующий: отказ зеркала не должен ронять деплой. Проверка —
       # эхо приёмника (#110), а не «шаг зелёный»: после записи читаем ключ обратно
       # и сверяем первые символы sha256. Значения в лог не попадают.
-      - name: Зеркалировать свои секреты в комнату vault
+      # Зеркало секретов в свою комнату — ПАСПОРТОМ (ADR-0012, форма Б).
+      # Раньше шаг писал комнатным токеном прямо с бокса, а токен на боксе был
+      # read-write — шире канона («на бокс кладём только read-only; пишущий не
+      # кладём»). Теперь запись идёт сессией, открытой по удостоверению прогона
+      # (OIDC), и комнатный токен бокса может остаться read-only: читать комнату
+      # он умеет, а писать в неё больше не должен.
+      #
+      # Приёмка прежняя — эхо приёмника (отпечаток sha256 по каждому ключу), а не
+      # «запись принята» (#110). Значения в лог не попадают: с бокса они едут
+      # файлом 0600, тело запроса — файлом, токен маскируется до первого
+      # использования, сессия гасится в trap.
+      - name: Зеркалировать свои секреты в комнату vault (по паспорту)
         if: success()
         continue-on-error: true
         env:
+          VAULT_BASE: https://${{ secrets.DEPLOY_SSH_HOST }}
           PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+          DEPLOY_HOST: vmalmyzhe
         run: |
-          set -eo pipefail
-          # ssh склеивает аргументы в одну строку для удалённого шелла, поэтому
-          # пустой аргумент не доезжает как пустой $1 — он исчезает, и позиционные
-          # параметры на боксе сдвигаются. Проверяем здесь, как это уже сделано
-          # для четырёх SSH-реквизитов в шаге Setup SSH.
-          [ -n "$PROD_ENV_FILE" ] || { echo "::error::secrets.PROD_ENV_FILE не задан — зеркалирование не выполнено"; exit 1; }
-          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "$PROD_ENV_FILE" <<'REMOTE'
-          exec 2>&1
-          set -eo pipefail
-          ENV_FILE="$1"
-          command -v jq >/dev/null || { echo "::warning::jq на боксе нет — зеркалирование пропущено"; exit 0; }
+          set -euo pipefail
+          bash .github/scripts/vault-mirror.sh
 
-          # Доступность файла проверяем ОДИН раз и громко. Иначе недоступность
-          # prod-env (нет правила sudoers, путь переехал) неотличима от «ключей
-          # нет»: val() вернёт пусто для всех имён, и шаг напечатает
-          # «SECRETS_TOKEN/SECRETS_VAULT_URL в prod-env нет» — ложный диагноз,
-          # который отправляет разбираться не туда. Отсутствие ОТДЕЛЬНОГО ключа —
-          # норма, недоступность самого файла — нет.
-          sudo -n test -r "$ENV_FILE" || { echo "::error::prod-env недоступен (sudo -n или путь) — зеркалирование не выполнено"; exit 1; }
-
-          # ⚠️ Отсутствующее имя — норма (не все ключи заведены), поэтому неудачный
-          # grep гасится здесь. Без этого `set -eo pipefail` убивает весь скрипт на
-          # первом же отсутствующем ключе — и шаг падает молча, ничего не напечатав
-          # (поймано живым прогоном 03.09, run 33774054942).
-          # Гашение здесь безопасно ТОЛЬКО потому, что читаемость файла проверена
-          # выше: иначе `|| out=""` накрывал бы и отказ sudo, и неверный путь.
-          val() {
-            local out
-            out=$(sudo -n grep "^$1=" "$ENV_FILE" 2>/dev/null | head -1) || out=""
-            printf '%s' "${out#*=}" | sed 's/^"\(.*\)"$/\1/'
-          }
-          TOKEN=$(val SECRETS_TOKEN); VAULT=$(val SECRETS_VAULT_URL)
-          [ -n "$TOKEN" ] && [ -n "$VAULT" ] || { echo "::warning::SECRETS_TOKEN/SECRETS_VAULT_URL в prod-env нет — зеркалирование пропущено"; exit 0; }
-          VAULT="${VAULT%/}"; case "$VAULT" in */api/secrets) ;; *) VAULT="$VAULT/api/secrets" ;; esac
-
-          # Якорь: новый СВОЙ секрет в .env.example → добавить и сюда.
-          NAMES="PAYLOAD_SECRET GATEWAY_KEY_VMALMYZHE INGEST_PUBLISH_KEY SARAFAN_GATEWAY_KEY PROMPTS_TOKEN_VMALMYZHE"
-          umask 077; TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
-          # Пары «имя<TAB>значение» на stdin jq — без eval и без подстановки в
-          # строку: значение с пробелом, кавычкой или $ ничего не ломает и в
-          # командную строку (а значит, в `ps`) не попадает. Перевод строки в
-          # значении невозможен: EnvironmentFile его не разбирает.
-          # ⚠️ Весь цикл перенаправлен в файл данных, поэтому ЛЮБОЕ сообщение
-          # внутри него обязано идти в stderr. Обычный echo уезжал в тот же файл
-          # и превращался в ключ-мусор без табуляции: комната отвечала HTTP 400
-          # (поймано живым прогоном 03.09, run 33775309972).
-          n=0
-          for NAME in $NAMES; do
-            V=$(val "$NAME"); [ -n "$V" ] || { echo "$NAME: нет в prod-env, пропущен" >&2; continue; }
-            printf '%s\t%s\n' "$NAME" "$V"; n=$((n+1))
-          done > "$TMP.pairs"
-          [ "$n" -gt 0 ] || { echo "::warning::зеркалить нечего"; exit 0; }
-          # Строка без табуляции — не пара: отбрасываем, а не шлём как ключ.
-          jq -R -s '{secrets: (split("\n") | map(select(index("\t") != null)) | map(split("\t"))
-                     | map({(.[0]): (.[1:] | join("\t"))}) | add)}' < "$TMP.pairs" > "$TMP"
-          rm -f "$TMP.pairs"
-          jq -e '.secrets | type == "object" and (keys | length) > 0' "$TMP" > /dev/null \
-            || { echo "::warning::документ для комнаты пуст или не объект — не шлём"; exit 0; }
-          echo "к отправке ключей: $(jq -r '.secrets | keys | join(", ")' "$TMP")"
-
-          # Код ответа печатаем всегда: «комната не приняла» без кода — это ровно
-          # тот молчаливый отказ, который спека называет хуже отсутствия шага.
-          # Тело ответа в лог не кладём: в нём может быть эхо присланного.
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$VAULT" \
-            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-            --data @"$TMP" --max-time 20 || echo 000)
-          case "$CODE" in
-            2*) echo "запись принята (HTTP $CODE)" ;;
-            401|403) echo "::warning::HTTP $CODE — токен комнаты писать не может; запись делает паспорт (ADR-0012)"; exit 0 ;;
-            *) echo "::warning::комната не приняла запись, HTTP $CODE"; exit 0 ;;
-          esac
-
-          # Эхо приёмника: читаем обратно и сверяем отпечаток, не значение.
-          # ⚠️ curl -sf на HTTP>=400 даёт код 22, а под `set -eo pipefail` он
-          # протаскивался через конвейер в присваивание и обрывал ВЕСЬ удалённый
-          # скрипт посреди первой итерации — без единой строки объяснения. Приёмка
-          # при этом не выполнялась вовсе, а в логе оставалось «запись принята»,
-          # которое читается как «сверено». Поэтому отказ ловим явно.
-          bad=0
-          for NAME in $NAMES; do
-            V=$(val "$NAME"); [ -n "$V" ] || continue
-            MINE=$(printf '%s' "$V" | sha256sum | cut -c1-12)
-            RESP=$(curl -sf --max-time 15 -H "Authorization: Bearer $TOKEN" "$VAULT?key=$NAME" || true)
-            if [ -z "$RESP" ]; then
-              echo "::warning::$NAME: комната не отдала значение — эхо не сверено"
-              bad=$((bad+1)); continue
-            fi
-            THEIRS=$(printf '%s' "$RESP" | jq -r --arg n "$NAME" '.secrets[$n] // empty' | tr -d '\n' | sha256sum | cut -c1-12)
-            if [ "$MINE" = "$THEIRS" ]; then
-              echo "$NAME: эхо совпало ($MINE)"
-            else
-              echo "::warning::$NAME: эхо НЕ совпало ($MINE vs $THEIRS)"
-              bad=$((bad+1))
-            fi
-          done
-          # Результат сравнения обязан куда-то идти. Раньше обе ветки кончались
-          # успешным echo, шаг был зелёным при любом исходе — то есть приёмка
-          # DR-копии печатала, но не могла провалиться. Шаг стоит под
-          # continue-on-error, поэтому красный здесь виден и не рвёт деплой.
-          [ "$bad" -eq 0 ] || { echo "::error::эхо не сошлось по $bad ключам — DR-копия секретов в комнате не подтверждена"; exit 1; }
-          echo "эхо сошлось по всем зеркалируемым ключам"
-          REMOTE
 
       - name: Smoke check — local routes (/, /news, /admin)
         run: |
