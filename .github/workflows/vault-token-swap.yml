@@ -66,11 +66,10 @@ jobs:
       - name: Проверить наличие кода и выполнить обмен
         run: |
           set -euo pipefail
-          # Код должен лежать на боксе файлом: в лог он не попадает.
-          if ! ssh -o ConnectTimeout=15 vmalmyzhe 'test -s /tmp/vm-code.txt'; then
-            echo "::error::на боксе нет /tmp/vm-code.txt с одноразовым кодом — положите его туда (0600) и запустите снова"
-            exit 1
-          fi
+          # Код может лежать на боксе файлом (/tmp/vm-code.txt) — но чаще его
+          # кладёт владелец прямо в нашу комнату под ключом VM_BOOTSTRAP_CODE,
+          # и тогда скрипт берёт его оттуда сам. Оба пути равнозначны: код
+          # одноразовый и после обмена мёртв.
           scp -q .github/scripts/vault-token-swap.sh vmalmyzhe:/tmp/vm-token-swap.sh
           ssh -o ConnectTimeout=15 vmalmyzhe 'sudo -n bash /tmp/vm-token-swap.sh /tmp/vm-code.txt'
           ssh -o ConnectTimeout=15 vmalmyzhe 'sudo -n rm -f /tmp/vm-code.txt /tmp/vm-token-swap.sh'

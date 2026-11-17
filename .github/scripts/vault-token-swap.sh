@@ -14,18 +14,12 @@
 set -euo pipefail
 
 ENV_FILE=/etc/vmalmyzhe/vmalmyzhe.env
-CODE_FILE="${1:?нужен файл с кодом}"
+CODE_FILE="${1:-}"
 TMPD="$(mktemp -d)"
 trap 'rm -rf "$TMPD"' EXIT
 umask 077
 
 fail() { echo "::error::$1" >&2; exit 1; }
-
-[ -s "$CODE_FILE" ] || fail "файл с кодом пуст"
-CODE="$(tr -d '\r\n' < "$CODE_FILE")"
-# BOM (EF BB BF) в начало — тоже мусор: он попадёт в заголовок curl и код станет
-# неверным. Снимаем на входе, чтобы файл можно было класть любым способом.
-CODE="${CODE#$'\xEF\xBB\xBF'}"
 
 set -a; . "$ENV_FILE"; set +a
 TOKEN_OLD="${SECRETS_TOKEN:-}"
@@ -33,15 +27,38 @@ VAULT="${SECRETS_VAULT_URL%/}"
 [ -n "$TOKEN_OLD" ] || fail "в prod-env нет SECRETS_TOKEN"
 [ -n "$VAULT" ] || fail "в prod-env нет SECRETS_VAULT_URL"
 
+# Код временки берём из файла на боксе, а если файла нет — из НАШЕЙ ЖЕ комнаты
+# под ключом VM_BOOTSTRAP_CODE: туда его кладёт владелец прямо в интерфейсе
+# КАРМАНА. Так код не идёт ни через чат, ни через файл — а после обмена он
+# мёртв (одноразовый) и остаётся только удалить его из комнаты.
+CODE=""
+CODE_SOURCE=""
+if [ -n "$CODE_FILE" ] && [ -s "$CODE_FILE" ]; then
+  CODE="$(tr -d '\r\n' < "$CODE_FILE")"
+  # BOM (EF BB BF) в начало — тоже мусор: он попадёт в заголовок curl и код станет
+  # неверным. Снимаем на входе, чтобы файл можно было класть любым способом.
+  CODE="${CODE#$'\xEF\xBB\xBF'}"
+  CODE_SOURCE="файл на боксе"
+else
+  CODE="$(curl -s --max-time 20 -H "Authorization: Bearer $TOKEN_OLD" \
+    "$VAULT/api/secrets?key=VM_BOOTSTRAP_CODE" \
+    | jq -r '.secrets.VM_BOOTSTRAP_CODE // empty' | tr -d '\r\n')"
+  CODE_SOURCE="комната, ключ VM_BOOTSTRAP_CODE"
+fi
+[ -n "$CODE" ] || fail "код временки не найден: нет файла $CODE_FILE и нет ключа VM_BOOTSTRAP_CODE в комнате"
+echo "код временки взят: $CODE_SOURCE"
+
 echo "== права нынешнего токена (до подмены) =="
 curl -s --max-time 20 -H "Authorization: Bearer $TOKEN_OLD" "$VAULT/api/secrets/self" \
   | jq -c '{slug, canWrite, identity: (if .identity == null then "статический" else "паспортный" end)}'
 
 echo "== обмен временки =="
 # Код — в конфиг-файл curl, а не в argv: на общем боксе argv виден соседям.
+# Сначала кладём его в файл 0600 и подставляем оттуда.
+printf '%s' "$CODE" > "$TMPD/code"
 {
   printf 'header = "Authorization: Bearer '
-  tr -d '\r\n' < "$CODE_FILE"
+  cat "$TMPD/code"
   printf '"\n'
   printf 'request = "POST"\n'
   printf 'url = "%s/api/secrets/claim"\n' "$VAULT"
