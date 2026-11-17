@@ -1,0 +1,76 @@
+name: Vault token swap (RO)
+
+# Замена комнатного токена на боксе: одноразовая временка → постоянный
+# RO-токен комнаты (D-185). Смысл — сузить право токена на боксе с read-write
+# до read-only, как требует канон («на бокс кладём только read-only; пишущий
+# не кладём»), при этом DR-копия секретов в комнате продолжает писаться
+# паспортом (ADR-0012), а не этим токеном.
+#
+# Как пользоваться:
+#   1. владелец выпускает в КАРМАНЕ времянку для комнаты `vmalmyzhe`
+#      БЕЗ галочки «read-write» и кладёт её код в файл на боксе:
+#      `/tmp/vm-code.txt` (0600) — код туда попадает не через лог и не через
+#      GitHub: одноразовый, сгорает на обмене;
+#   2. этот workflow запускается вручную и делает обмен + подмену в prod-env +
+#      рестарт + приёмку;
+#   3. владелец отзывает старый rw-токен в «Секреты» → комната → «Токены
+#      доступа».
+#
+# Секреты в лог не попадают: код лежит файлом на боксе, значение токена не
+# печатается (только права, slug, длина и отпечаток sha256 на 12 символов).
+# Права на запись в prod-env и рестарт сервиса — от имени пользователя деплоя
+# (на боксе у него есть sudo), поэтому шаг идёт через SSH, а не через
+# локальный sudo.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ] || [ -z "$DEPLOY_SSH_USER" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / secrets.DEPLOY_SSH_USER"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_vmalmyzhe
+          chmod 600 ~/.ssh/id_ed25519_vmalmyzhe
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host vmalmyzhe
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User $DEPLOY_SSH_USER
+            IdentityFile ~/.ssh/id_ed25519_vmalmyzhe
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Проверить наличие кода и выполнить обмен
+        run: |
+          set -euo pipefail
+          # Код должен лежать на боксе файлом: в лог он не попадает.
+          if ! ssh -o ConnectTimeout=15 vmalmyzhe 'test -s /tmp/vm-code.txt'; then
+            echo "::error::на боксе нет /tmp/vm-code.txt с одноразовым кодом — положите его туда (0600) и запустите снова"
+            exit 1
+          fi
+          scp -q .github/scripts/vault-token-swap.sh vmalmyzhe:/tmp/vm-token-swap.sh
+          ssh -o ConnectTimeout=15 vmalmyzhe 'sudo -n bash /tmp/vm-token-swap.sh /tmp/vm-code.txt'
+          ssh -o ConnectTimeout=15 vmalmyzhe 'sudo -n rm -f /tmp/vm-code.txt /tmp/vm-token-swap.sh'
