@@ -1,20 +1,33 @@
 #!/bin/bash
-# Замена комнатного токена на боксе: обмен одноразовой временки на постоянный
-# RO-токен комнаты (D-185), запись в prod-env, рестарт сервиса, приёмка.
+# Замена комнатного токена на боксе на постоянный RO-токен комнаты (D-185):
+# запись в prod-env, рестарт сервиса, приёмка.
 #
-# Вход: $1 — файл с одноразовым кодом (на боксе, 600). Код не печатается.
+# Два пути, оба без передачи секрета через агента (передача на бокс закрыта
+# гейтом прав, а в комнату код кладёт владелец):
 #
-# Что проверяется:
-#   • ответ обмена — 201, slug = наша комната, canWrite = false (иначе стоп);
+#   1) ПРЯМОЙ — владелец в КАРМАНЕ выпускает постоянный токен «только
+#      чтение» (раздел «Токены доступа» → «Создать», галочка «Разрешить
+#      запись» снята) и кладёт его в НАШУ комнату под ключом `VM_RO_TOKEN`.
+#      Скрипт берёт токен оттуда. Срок не важен — токен бессрочный.
+#   2) ЧЕРЕЗ ВРЕМЕНКУ — владелец кладёт в нашу комнату код одноразовой
+#      временки под ключом `VM_BOOTSTRAP_CODE` (или кладёт код файлом на бокс,
+#      $1) — скрипт обменивает его на постоянный токен.
+#
+# Вход: $1 — необязательный файл с кодом времянки на боксе (600).
+#
+# Проверки:
+#   • права нового токена ДО подмены: slug = наша комната, canWrite = false
+#     (токен с правом записи на бокс не кладём никогда — канон);
 #   • после подмены: GET /api/secrets/self новым токеном → canWrite=false,
 #     identity=null (статический токен владельца, не паспортная сессия);
 #   • портал поднялся после рестарта (/api/auth/me и / → 200);
-#   • новое значение токена НЕ печатается, только отпечаток sha256 (12 символов)
+#   • значение токена НЕ печатается — только отпечаток sha256 (12 символов)
 #     и факты о правах.
 set -euo pipefail
 
 ENV_FILE=/etc/vmalmyzhe/vmalmyzhe.env
 CODE_FILE="${1:-}"
+ROOM=vmalmyzhe
 TMPD="$(mktemp -d)"
 trap 'rm -rf "$TMPD"' EXIT
 umask 077
@@ -27,65 +40,97 @@ VAULT="${SECRETS_VAULT_URL%/}"
 [ -n "$TOKEN_OLD" ] || fail "в prod-env нет SECRETS_TOKEN"
 [ -n "$VAULT" ] || fail "в prod-env нет SECRETS_VAULT_URL"
 
-# Код временки берём из файла на боксе, а если файла нет — из НАШЕЙ ЖЕ комнаты
-# под ключом VM_BOOTSTRAP_CODE: туда его кладёт владелец прямо в интерфейсе
-# КАРМАНА. Так код не идёт ни через чат, ни через файл — а после обмена он
-# мёртв (одноразовый) и остаётся только удалить его из комнаты.
-CODE=""
-CODE_SOURCE=""
-if [ -n "$CODE_FILE" ] && [ -s "$CODE_FILE" ]; then
-  CODE="$(tr -d '\r\n' < "$CODE_FILE")"
-  # BOM (EF BB BF) в начало — тоже мусор: он попадёт в заголовок curl и код станет
-  # неверным. Снимаем на входе, чтобы файл можно было класть любым способом.
-  CODE="${CODE#$'\xEF\xBB\xBF'}"
-  CODE_SOURCE="файл на боксе"
-else
-  CODE="$(curl -s --max-time 20 -H "Authorization: Bearer $TOKEN_OLD" \
-    "$VAULT/api/secrets?key=VM_BOOTSTRAP_CODE" \
-    | jq -r '.secrets.VM_BOOTSTRAP_CODE // empty' | tr -d '\r\n')"
-  CODE_SOURCE="комната, ключ VM_BOOTSTRAP_CODE"
-fi
-[ -n "$CODE" ] || fail "код временки не найден: нет файла $CODE_FILE и нет ключа VM_BOOTSTRAP_CODE в комнате"
-echo "код временки взят: $CODE_SOURCE"
+room_key() {
+  # Значение ключа из НАШЕЙ комнаты — своим же комнатным токеном.
+  curl -s --max-time 20 -H "Authorization: Bearer $TOKEN_OLD" \
+    "$VAULT/api/secrets?key=$1" | jq -r --arg k "$1" '.secrets[$k] // empty' | tr -d '\r\n'
+}
 
 echo "== права нынешнего токена (до подмены) =="
 curl -s --max-time 20 -H "Authorization: Bearer $TOKEN_OLD" "$VAULT/api/secrets/self" \
   | jq -c '{slug, canWrite, identity: (if .identity == null then "статический" else "паспортный" end)}'
 
-echo "== обмен временки =="
-# Код — в конфиг-файл curl, а не в argv: на общем боксе argv виден соседям.
-# Сначала кладём его в файл 0600 и подставляем оттуда.
-printf '%s' "$CODE" > "$TMPD/code"
+NEW_TOKEN=""
+TOKEN_SOURCE=""
+
+# ── путь 1: постоянный токен, уже лежит в нашей комнате ──────────────────────
+DIRECT="$(room_key VM_RO_TOKEN)"
+if [ -n "$DIRECT" ]; then
+  NEW_TOKEN="$DIRECT"
+  TOKEN_SOURCE="комната, ключ VM_RO_TOKEN (постоянный токен)"
+  echo "новый токен взят: $TOKEN_SOURCE"
+else
+  # ── путь 2: обмен одноразовой временки ─────────────────────────────────────
+  CODE=""
+  CODE_SOURCE=""
+  if [ -n "$CODE_FILE" ] && [ -s "$CODE_FILE" ]; then
+    CODE="$(tr -d '\r\n' < "$CODE_FILE")"
+    # BOM (EF BB BF) в начало — тоже мусор: он попадёт в заголовок curl и код
+    # станет неверным. Снимаем на входе, чтобы файл можно было класть любым
+    # способом.
+    CODE="${CODE#$'\xEF\xBB\xBF'}"
+    CODE_SOURCE="файл на боксе"
+  else
+    CODE="$(room_key VM_BOOTSTRAP_CODE)"
+    CODE_SOURCE="комната, ключ VM_BOOTSTRAP_CODE"
+  fi
+  [ -n "$CODE" ] || fail "не найден ни постоянный токен (VM_RO_TOKEN в комнате), ни код временки (VM_BOOTSTRAP_CODE в комнате или файл $CODE_FILE)"
+  echo "код временки взят: $CODE_SOURCE"
+
+  # Код — в конфиг-файл curl, а не в argv: на общем боксе argv виден соседям.
+  # Сначала кладём его в файл 0600 и подставляем оттуда.
+  printf '%s' "$CODE" > "$TMPD/code"
+  {
+    printf 'header = "Authorization: Bearer '
+    cat "$TMPD/code"
+    printf '"\n'
+    printf 'request = "POST"\n'
+    printf 'url = "%s/api/secrets/claim"\n' "$VAULT"
+    printf 'silent\n'
+    printf 'output = "%s"\n' "$TMPD/claim.json"
+    printf 'write-out = "%%{http_code}"\n'
+    printf 'max-time = 20\n'
+  } > "$TMPD/curlcfg"
+  CODE_RESP="$(curl -K "$TMPD/curlcfg")"
+  case "$CODE_RESP" in
+    201) ;;
+    401) fail "код не принят (401: неизвестный, истёкший, отозванный или уже обменянный)" ;;
+    429) fail "рейт-лимит на обмен" ;;
+    *)   fail "обмен → HTTP $CODE_RESP" ;;
+  esac
+
+  NEW_TOKEN="$(jq -r '.token // empty' "$TMPD/claim.json")"
+  NEW_SLUG="$(jq -r '.slug // empty' "$TMPD/claim.json")"
+  # ⚠️ jq-ловушка: `false // "null"` возвращает "null" — оператор `//` считает
+  # false «пустым». Ответ обмена присылает canWrite=false буквально, и старый
+  # разбор превращал это в "null" → страж отвергал верный ответ, а код при этом
+  # уже израсходывался. Разбираем через has()/tostring.
+  NEW_CANWRITE="$(jq -r 'if has("canWrite") then (.canWrite | tostring) else "нет-поля" end' "$TMPD/claim.json")"
+  rm -f "$TMPD/claim.json"
+  [ -n "$NEW_TOKEN" ] || fail "201, но токен в ответе пуст"
+  [ "$NEW_SLUG" = "$ROOM" ] || fail "обмен выдал чужую комнату: $NEW_SLUG"
+  [ "$NEW_CANWRITE" = "false" ] || fail "обмен выдал токен с правом записи (canWrite=$NEW_CANWRITE) — подмена не выполнена"
+  TOKEN_SOURCE="обмен временки ($CODE_SOURCE)"
+  echo "новый токен получен: $TOKEN_SOURCE"
+fi
+
+# ── страж: права проверяем САМИМ новым токеном, ДО подмены ─────────────────
+printf '%s' "$NEW_TOKEN" > "$TMPD/newtoken"
 {
   printf 'header = "Authorization: Bearer '
-  cat "$TMPD/code"
+  cat "$TMPD/newtoken"
   printf '"\n'
-  printf 'request = "POST"\n'
-  printf 'url = "%s/api/secrets/claim"\n' "$VAULT"
+  printf 'url = "%s/api/secrets/self"\n' "$VAULT"
   printf 'silent\n'
-  printf 'output = "%s"\n' "$TMPD/claim.json"
-  printf 'write-out = "%%{http_code}"\n'
+  printf 'output = "%s"\n' "$TMPD/self.json"
   printf 'max-time = 20\n'
-} > "$TMPD/curlcfg"
-CODE_RESP="$(curl -K "$TMPD/curlcfg")"
-case "$CODE_RESP" in
-  201) ;;
-  401) fail "код не принят (401: неизвестный, истёкший, отозванный или уже обменянный)" ;;
-  429) fail "рейт-лимит на обмен" ;;
-  *)   fail "обмен → HTTP $CODE_RESP" ;;
-esac
-
-NEW_TOKEN="$(jq -r '.token // empty' "$TMPD/claim.json")"
-NEW_SLUG="$(jq -r '.slug // empty' "$TMPD/claim.json")"
-# ⚠️ jq-ловушка: `false // "null"` возвращает "null" — оператор `//` считает
-# false «пустым». Ответ обмена присылает canWrite=false буквально, и старый
-# разбор превращал это в "null" → страж отвергал верный ответ, а код при этом
-# уже израсходывался. Разбираем через has()/tostring.
-NEW_CANWRITE="$(jq -r 'if has("canWrite") then (.canWrite | tostring) else "нет-поля" end' "$TMPD/claim.json")"
-rm -f "$TMPD/claim.json"
-[ -n "$NEW_TOKEN" ] || fail "201, но токен в ответе пуст"
-[ "$NEW_SLUG" = "vmalmyzhe" ] || fail "обмен выдал чужую комнату: $NEW_SLUG"
-[ "$NEW_CANWRITE" = "false" ] || fail "обмен выдал токен с правом записи (canWrite=$NEW_CANWRITE) — подмена не выполнена"
+} > "$TMPD/selfcfg"
+SELF="$(curl -K "$TMPD/selfcfg")"
+NEW_SLUG="$(printf '%s' "$SELF" | jq -r '.slug // empty')"
+NEW_CANWRITE="$(printf '%s' "$SELF" | jq -r 'if has("canWrite") then (.canWrite | tostring) else "нет-поля" end')"
+rm -f "$TMPD/self.json"
+[ "$NEW_SLUG" = "$ROOM" ] || fail "новый токен от другой комнаты: '$NEW_SLUG' — подмена не выполнена"
+[ "$NEW_CANWRITE" = "false" ] || fail "новый токен с правом записи (canWrite=$NEW_CANWRITE) — подмена не выполнена"
 
 echo "комната: $NEW_SLUG, право: read-only, длина значения: ${#NEW_TOKEN}"
 echo "отпечаток значения: $(printf '%s' "$NEW_TOKEN" | sha256sum | cut -c1-12)"
@@ -135,5 +180,6 @@ curl -s --max-time 20 -H "Authorization: Bearer $SECRETS_TOKEN" "$VAULT/api/secr
   | jq -c '{slug, canWrite, identity: (if .identity == null then "статический" else "паспортный" end), expiresAt}'
 
 echo "== что осталось за владельцем =="
-echo "отозвать старый rw-токен комнаты: «Секреты» → комната vMalmyzhe → «Токены доступа» → строка read-write → «Отозвать»"
+echo "отозвать старый rw-токен комнаты: «Секреты» → комната vmalmyzhe → «Токены доступа» → строка read-write → «Отозвать»"
+echo "удалить из комнаты ключ, которым клали новый токен (VM_RO_TOKEN или VM_BOOTSTRAP_CODE)"
 echo "== готово =="
