@@ -99,10 +99,14 @@ BOX_FILE=""
 [ -s "$TMPD/pairs.env" ] || { warn "зеркалить нечего — в prod-env нет ни одного из ключей"; exit 0; }
 
 # ── 3. Тело запроса (файл, значение в argv не попадает) ──────────────────────
-jq -R -s 'split("\n") | map(select(length > 0)) | map(split("\t")) | map({(.[0]): (.[1:] | join("\t"))}) | add' \
+# ⚠️ Обёртка `secrets` обязательна: POST /api/secrets ждёт {"secrets":{...}},
+# а не плоский объект. Без неё комната отвечает 400 — это поймала проба
+# `Vault mirror check` 17.11 (первый прогон), до того как путь встал в деплой.
+jq -R -s 'split("\n") | map(select(length > 0)) | map(split("\t")) | map({(.[0]): (.[1:] | join("\t"))}) | add | {secrets: .}' \
   < "$TMPD/pairs.env" > "$TMPD/mirror.json" || die "не собралось тело запроса"
-jq -e 'type == "object" and (keys | length) > 0' "$TMPD/mirror.json" >/dev/null \
-  || { warn "документ для комнаты пуст — не шлём"; exit 0; }
+jq -e 'type == "object" and (.secrets | type == "object") and (.secrets | keys | length) > 0' \
+  "$TMPD/mirror.json" > /dev/null \
+  || { warn "тело запроса не вида {secrets:{…}} — не шлём"; exit 0; }
 echo "к отправке ключей: $(jq -r '.secrets | keys | join(", ")' "$TMPD/mirror.json")"
 
 # ── 4. Запись паспортной сессией ──────────────────────────────────────────────
