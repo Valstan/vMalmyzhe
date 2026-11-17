@@ -123,12 +123,23 @@ printf '%s' "$NEW_TOKEN" > "$TMPD/newtoken"
   printf 'url = "%s/api/secrets/self"\n' "$VAULT"
   printf 'silent\n'
   printf 'output = "%s"\n' "$TMPD/self.json"
+  printf 'write-out = "%%{http_code}"\n'
   printf 'max-time = 20\n'
 } > "$TMPD/selfcfg"
-SELF="$(curl -K "$TMPD/selfcfg")"
+# Тело ответа уходит в файл, в stdout — только код: так диагностика не может
+# выплеснуть значение токена в лог.
+SELF_CODE="$(curl -K "$TMPD/selfcfg")"
+SELF="$(cat "$TMPD/self.json" 2>/dev/null || echo '')"
 NEW_SLUG="$(printf '%s' "$SELF" | jq -r '.slug // empty')"
 NEW_CANWRITE="$(printf '%s' "$SELF" | jq -r 'if has("canWrite") then (.canWrite | tostring) else "нет-поля" end')"
+SELF_ERR="$(printf '%s' "$SELF" | jq -r '.error // empty')"
 rm -f "$TMPD/self.json"
+# Диагностика безопасна: печатаем форму значения (префикс и длина) и ответ
+# хранилища (в нём нет секрета — только код/ошибка), чтобы отличить «мусор в
+# значении» от «токен не от нашей комнаты».
+echo "новый токен: длина ${#NEW_TOKEN}, начало «${NEW_TOKEN:0:4}»"
+echo "интроспекция: HTTP $SELF_CODE"
+[ -n "$SELF_ERR" ] && echo "хранилище ответило: $SELF_ERR"
 [ "$NEW_SLUG" = "$ROOM" ] || fail "новый токен от другой комнаты: '$NEW_SLUG' — подмена не выполнена"
 [ "$NEW_CANWRITE" = "false" ] || fail "новый токен с правом записи (canWrite=$NEW_CANWRITE) — подмена не выполнена"
 
