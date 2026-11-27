@@ -90,3 +90,20 @@ jobs:
       - name: Dead code
         working-directory: web
         run: pnpm deadcode
+
+      # Гейт сервиса ЕСА (OIDC-провайдер экосистемы) — свой шаг: сервис на
+      # Python, у него своя тест-матрица (pytest) и свой набор зависимостей.
+      # Отдельным шагом, а не скриптом-агрегатом: гейт, вызываемый через
+      # общий скрипт, останавливается на первой ошибке и не показывает, что
+      # красный соседний (правило #125).
+      - name: Setup Python (ESA)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: ESA tests (pytest)
+        working-directory: esa
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          python -m pytest -q

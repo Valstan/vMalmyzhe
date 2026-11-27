@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Войти в {{ brand.title }}</title>
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('setka-theme') || 'light';
+                document.documentElement.setAttribute('data-bs-theme', t);
+            } catch (e) { /* localStorage недоступен — остаёмся в light */ }
+        })();
+    </script>
+    <link href="/static/vendor/bootstrap/bootstrap.min.css?v={{ STATIC_VERSION }}" rel="stylesheet">
+    <link rel="stylesheet" href="/static/vendor/bootstrap-icons/bootstrap-icons.css?v={{ STATIC_VERSION }}">
+</head>
+<body class="d-flex align-items-center" style="min-height: 100vh;">
+    <div class="container" style="max-width: 420px;">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <div class="text-center mb-1" style="font-size: 2.5rem; line-height: 1;">
+                    {%- if brand.icon and brand.icon.startswith('http') -%}
+                    <img src="{{ brand.icon }}" alt="" style="height: 48px;">
+                    {%- else -%}
+                    {{ brand.icon }}
+                    {%- endif -%}
+                </div>
+                <h1 class="h4 mb-1 text-center">Войти в {{ brand.title }}</h1>
+                <p class="text-secondary text-center mb-4" id="form-subtitle">{{ brand.sub }}</p>
+
+                <div class="alert alert-danger d-none" id="error-box" role="alert"></div>
+                {% if logged_out %}
+                <div class="alert alert-success small" role="status">Вы вышли из всех сервисов Малмыжа.</div>
+                {% endif %}
+                {% if reauth %}
+                <div class="alert alert-warning small" id="reauth-note" role="status">
+                    {{ brand.title if brand and brand.title else 'Сервис' }} просит подтвердить, что это вы.
+                    Войдите ещё раз — сессия останется прежней.
+                </div>
+                {% endif %}
+                {% if current_login %}
+                <div class="alert alert-info small" id="already-in" role="status">
+                    Вы уже вошли как <strong>{{ current_login }}</strong>.
+                    <a href="#" class="alert-link" id="logout-all">Выйти из всех сервисов</a>
+                </div>
+                {% endif %}
+
+                <form id="auth-form">
+                    <div class="mb-3">
+                        <label class="form-label" for="login">Логин</label>
+                        <input class="form-control" id="login" autocomplete="username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="password">Пароль</label>
+                        <input class="form-control" id="password" type="password"
+                               autocomplete="current-password" required>
+                    </div>
+                    {# Инвайт-код показываем только если регистрация закрыта кодом (ESA_INVITE_CODE). #}
+                    {% if invite_required %}
+                    <div class="mb-3" id="invite-group">
+                        <label class="form-label" for="invite">Инвайт-код</label>
+                        <input class="form-control" id="invite" autocomplete="off">
+                    </div>
+                    {% else %}
+                    <div class="mb-3 d-none" id="invite-group">
+                        <label class="form-label" for="invite">Инвайт-код</label>
+                        <input class="form-control" id="invite" autocomplete="off">
+                    </div>
+                    {% endif %}
+                    <button class="btn btn-primary w-100" id="submit-btn" type="submit"
+                            style="background-color: {{ brand.accent }}; border-color: {{ brand.accent }};">Войти</button>
+                </form>
+
+                <div class="d-flex align-items-center my-3">
+                    <hr class="flex-grow-1"><span class="mx-2 text-secondary small">или</span><hr class="flex-grow-1">
+                </div>
+                <a class="btn btn-outline-primary w-100" id="vk-login-btn" href="/auth/vk/login">
+                    <i class="bi bi-chat-fill me-1"></i>Войти через ВКонтакте
+                </a>
+
+                <div class="text-center mt-3">
+                    <a href="#" class="link-secondary small" id="mode-toggle">Регистрация</a>
+                </div>
+                <p class="text-center text-secondary small mt-3 mb-0">
+                    Единый вход «Сервисы Малмыжа» — один аккаунт для всех сервисов на вмалмыже.рф.
+                    Входя, вы разрешаете передавать сервисам экосистемы ваше имя и e-mail из этого аккаунта.
+                </p>
+                <p class="text-center small mt-2 mb-0">
+                    <a class="link-secondary" href="/services"><i class="bi bi-grid-3x3-gap me-1"></i>Каталог сервисов Малмыжа</a>
+                </p>
+            </div>
+        </div>
+        <p class="text-center text-secondary small mt-4 mb-0">
+            Сделано программистом <a class="link-secondary" rel="author" href="https://xn--80adkmnnb2b.xn--80adkdyec4j.xn--p1ai/">Валентином Савиных</a>
+        </p>
+    </div>
+
+    <script>
+        let registerMode = false;
+        const errorBox = document.getElementById('error-box');
+        const inviteGroup = document.getElementById('invite-group');
+        // Регистрация закрыта инвайт-кодом? Тогда поле показываем и требуем.
+        const inviteRequired = {{ invite_required | tojson }};
+
+        // next= провалидирован сервером (routes/pages.py): свои относительные
+        // пути ИЛИ абсолютный URL сервисного поддомена зоны (единый вход —
+        // возврат на родной домен). Чужое сервер уже отбросил.
+        const safeNext = {{ safe_next | tojson }};
+        // Куда уходить после входа, если «next» не задан: каталог сервисов
+        // ЕСА. Операторских страниц Сарафана (дашборд, /tokens, /ad, /posts)
+        // на боксе входа нет — туда вести некуда.
+        const defaultLanding = {{ default_landing | tojson }};
+        if (safeNext) {
+            document.getElementById('vk-login-btn').href = '/auth/vk/login?next=' + encodeURIComponent(safeNext);
+        }
+
+        const logoutAll = document.getElementById('logout-all');
+        if (logoutAll) {
+            logoutAll.addEventListener('click', async (e) => {
+                e.preventDefault();
+                // Кука ЕСА — на весь домен, поэтому это выход из всех сервисов разом.
+                await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+                location.href = '/?logged_out=1';
+            });
+        }
+
+        document.getElementById('mode-toggle').addEventListener('click', (e) => {
+            e.preventDefault();
+            registerMode = !registerMode;
+            if (inviteRequired) {
+                inviteGroup.classList.toggle('d-none', !registerMode);
+            }
+            document.getElementById('form-subtitle').textContent =
+                registerMode ? 'Регистрация аккаунта' : 'Вход в систему';
+            document.getElementById('submit-btn').textContent = registerMode ? 'Зарегистрироваться' : 'Войти';
+            e.target.textContent = registerMode ? 'У меня уже есть аккаунт' : 'Регистрация';
+            errorBox.classList.add('d-none');
+        });
+
+        document.getElementById('auth-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorBox.classList.add('d-none');
+            const payload = {
+                login: document.getElementById('login').value.trim(),
+                password: document.getElementById('password').value,
+            };
+            if (registerMode && inviteRequired) payload.invite_code = document.getElementById('invite').value.trim();
+
+            try {
+                const resp = await fetch(registerMode ? '/api/auth/register' : '/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    errorBox.textContent = data.detail || ('Ошибка ' + resp.status);
+                    errorBox.classList.remove('d-none');
+                    return;
+                }
+                // Уважаем для всех ролей: OIDC-возврат (next=/oidc/authorize?… —
+                // round-trip внешних сервисов) и абсолютный возврат на родной
+                // поддомен (единый вход: кука действует на весь .вмалмыже.рф).
+                // Оператора в дашборд Сарафана отправлять некуда — сервис входа
+                // живёт на своём боксе, поэтому дефолт — каталог сервисов.
+                const crossHost = safeNext && (safeNext.startsWith('https://') || safeNext.startsWith('http://'));
+                location.href = (safeNext && (safeNext.startsWith('/oidc/') || crossHost))
+                    ? safeNext
+                    : defaultLanding;
+            } catch (err) {
+                errorBox.textContent = 'Сеть недоступна: ' + err;
+                errorBox.classList.remove('d-none');
+            }
+        });
+    </script>
+</body>
+</html>
