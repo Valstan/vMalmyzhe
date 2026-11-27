@@ -1,0 +1,45 @@
+# ЕСА (единая система авторизации экосистемы) — systemd-юнит прод-сервера. ШАБЛОН.
+#
+# Сервис вынесен из Сарафана на бокс портала (вмалмыже.рф): он держит
+# OIDC-провайдер, страницу входа и каталог сервисов. Слушает ТОЛЬКО loopback —
+# наружу его отдаёт nginx (deploy/nginx/esa.conf).
+#
+# Артефакт собирается в CI и распаковывается в $HOME/vmalmyzhe/esa/releases/<sha>;
+# current → симлинк (см. deploy-esa.yml).
+#
+# Реквизиты бокса (пользователь, путь к prod-env) в репо не держим — он публичный
+# (D-038). Плейсхолдеры подставляются при установке, на самом боксе, из-под
+# пользователя деплоя:
+#   sed -e "s|__DEPLOY_USER__|$USER|g" -e "s|__PROD_ENV__|<путь к prod-env>|g" \
+#       deploy/esa.service | sudo tee /etc/systemd/system/esa.service >/dev/null
+#   sudo systemctl daemon-reload && sudo systemctl enable --now esa
+# Установленная копия на боксе — источник истины; здесь — форма.
+[Unit]
+Description=ESA (OIDC provider of vMalmyzhe ecosystem)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=__DEPLOY_USER__
+WorkingDirectory=/home/__DEPLOY_USER__/vmalmyzhe/esa/current/esa
+# Секреты (ESA_DATABASE_URL, ESA_WEB_SECRET, ESA_PRIVATE_KEY_FILE, …) — вне
+# репо (pool #008).
+EnvironmentFile=__PROD_ENV__
+# Ключ подписи RS256 — файлом вне репо; путь в prod-env.
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/__DEPLOY_USER__/vmalmyzhe/esa/current/esa/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=3
+# Бокс маленький и общий (на нём же портал, карман, тренер): ограничиваем
+# рантайм, чтобы сервис не уронил постгрес. Один воркер — счётчики
+# rate-limit живут в памяти процесса (см. esa/README.md).
+MemoryMax=320M
+# Лёгкая защита
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/__DEPLOY_USER__/vmalmyzhe/esa
+
+[Install]
+WantedBy=multi-user.target

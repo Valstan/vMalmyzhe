@@ -62,3 +62,12 @@ hotline/presence.json
 # локально: репозиторий публичный (D-038), в отслеживаемые файлы не кладём.
 docs/INFRA.local.md
 *.local.md
+
+# Python-окружение сервиса ЕСА (esa/): локальный venv и кэши — не в git.
+esa/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Worktree-каталоги агентов: вне индекса (конвенция .claude/worktrees/<имя>).
+.claude/worktrees/

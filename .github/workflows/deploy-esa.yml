@@ -1,0 +1,175 @@
+name: Deploy ESA to production
+
+# Выкатка сервиса ЕСА (OIDC-провайдер экосистемы вМалмыже.рф) на бокс портала.
+#
+# Сервис живёт в каталоге esa/ репозитория и обслуживает вход.вмалмыже.рф:
+# OIDC-провайдер, страницу входа и каталог сервисов. Порт портала (Next.js)
+# обслуживает свою половину — /login и /services, — и ходит к ЕСА по
+# внутреннему API (loopback).
+#
+# Сборка зависимостей едет в CI (ubuntu), потому что на боксе нет pip
+# (ensurepip отсутствует), а собирать окружение на проде из сети — значит
+# тянуть в рантайм то, что не прошло гейты. Поэтому: wheelhouse собирается в
+# CI, на бокс едет уже проверенный набор.
+#
+# Требуется (значения — только в настройках репозитория; репо публичный,
+# D-038 — реквизиты бокса в отслеживаемых файлах не держим):
+#   secrets.SSH_PRIVATE_KEY   — приватная часть деплой-ключа
+#   secrets.DEPLOY_SSH_HOST   — хост прод-сервера
+#   vars.DEPLOY_SSH_PORT      — внешний SSH-порт
+#   secrets.DEPLOY_SSH_USER   — пользователь деплоя на боксе
+# Секреты рантайма ЕСА (RS256-ключ, SETKA_WEB_SECRET, DATABASE_URL) в CI не
+# нужны: на боксе их читает systemd из prod-env.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'esa/**'
+      - 'deploy/esa.service'
+      - '.github/workflows/deploy-esa.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-esa
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Гейт: тесты сервиса перед выкаткой. Красные — выкатки не будет.
+      - name: ESA tests
+        working-directory: esa
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          python -m pytest -q
+
+      # Wheelhouse: тот же набор пакетов, что и в гейте, но собранный для
+      # установки на боксе без сети.
+      - name: Build wheelhouse
+        working-directory: esa
+        run: |
+          python -m pip install --upgrade pip
+          pip wheel -r requirements.txt -w ../wheelhouse
+          tar czf ../esa-wheelhouse.tgz -C ../wheelhouse .
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          set -e
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$DEPLOY_SSH_HOST" ] || [ -z "$DEPLOY_SSH_PORT" ] || [ -z "$DEPLOY_SSH_USER" ]; then
+            echo "::error::Заданы не все: secrets.SSH_PRIVATE_KEY / secrets.DEPLOY_SSH_HOST / vars.DEPLOY_SSH_PORT / secrets.DEPLOY_SSH_USER"
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_vmalmyzhe
+          chmod 600 ~/.ssh/id_ed25519_vmalmyzhe
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat > ~/.ssh/config <<CFG
+          Host vmalmyzhe
+            HostName $DEPLOY_SSH_HOST
+            Port $DEPLOY_SSH_PORT
+            User $DEPLOY_SSH_USER
+            IdentityFile ~/.ssh/id_ed25519_vmalmyzhe
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+          # G315: ssh/scp при отказе связи печатают хост и порт отдельными
+          # словами, маскировка секретов их не ловит, а репо публичный.
+          cat > ~/.ssh/quiet <<'SH'
+          #!/usr/bin/env bash
+          "$@" 2>/dev/null
+          rc=$?
+          [ "$rc" = 255 ] && echo "::error::$1 не соединился с боксом (код 255); хост и порт не печатаем"
+          exit "$rc"
+          SH
+          chmod 700 ~/.ssh/quiet
+
+      - name: Ship and restart
+        run: |
+          set -e
+          tar czf esa-app.tgz esa
+          ~/.ssh/quiet scp -q esa-app.tgz esa-wheelhouse.tgz vmalmyzhe:/tmp/
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' "${{ github.sha }}" <<'REMOTE'
+          exec 2>&1
+          set -e
+          SHA="$1"
+          BASE="$HOME/vmalmyzhe/esa"
+          REL="$BASE/releases/$SHA"
+          mkdir -p "$REL"
+          tar xzf /tmp/esa-app.tgz -C "$REL"
+          mkdir -p "$REL/esa/wheelhouse"
+          tar xzf /tmp/esa-wheelhouse.tgz -C "$REL/esa/wheelhouse"
+          rm -f /tmp/esa-app.tgz /tmp/esa-wheelhouse.tgz
+          # Окружение создаётся на боксе (venv с pip требует python3-venv,
+          # который на боксе доустановлен один раз вручную), а пакеты ставятся
+          # ОФЛАЙН из wheelhouse — сети в рантайме не нужно.
+          rm -rf "$REL/esa/.venv"
+          python3 -m venv "$REL/esa/.venv"
+          "$REL/esa/.venv/bin/pip" install --no-index --find-links "$REL/esa/wheelhouse" -r "$REL/esa/requirements.txt"
+          ln -sfn "$REL" "$BASE/current"
+          sudo systemctl restart esa
+          # держим последние 5 релизов
+          ls -1dt "$BASE"/releases/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf
+          echo "deployed $SHA"
+          REMOTE
+
+      - name: Smoke check — локальные маршруты ЕСА
+        run: |
+          set -e
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' <<'REMOTE'
+          exec 2>&1
+          set -e
+          sleep 5   # дать сервису подняться после systemctl restart
+          fail=0
+          check() {
+            path="$1"; expected="$2"
+            status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "http://127.0.0.1:8010$path" || true)
+            echo "local $path → $status (ожидалось: $expected)"
+            case " $expected " in
+              *" $status "*) ;;
+              *) echo "::error::local $path = $status, ожидалось одно из: $expected"; fail=1 ;;
+            esac
+          }
+          check "/api/health"               "200"
+          check "/.well-known/openid-configuration" "200"
+          check "/.well-known/jwks.json"   "200"
+          check "/"                        "200"
+          check "/services"                "200"
+          # Внутренний API снаружи не выставлен: из внешнего мира его нет.
+          check "/internal/services"        "404"
+          exit $fail
+          REMOTE
+
+      - name: Service state + журнал (урезанный, с редакцией)
+        if: always()
+        run: |
+          set -e
+          ~/.ssh/quiet ssh vmalmyzhe 'bash -s' <<'REMOTE' || true
+          exec 2>&1
+          H="$(hostname -s)"; F="$(hostname -f 2>/dev/null || true)"
+          sudo systemctl show esa -p ActiveState -p SubState -p Result -p ExecMainStatus -p NRestarts
+          sudo journalctl -u esa -n 60 --no-pager -o cat \
+            | sed -E "s#([a-z]+://)[^/@[:space:]]+@#\1***:***@#g" \
+            | sed -E "s#/home/[^/[:space:]]+#/home/[user]#g" \
+            | { if [ -n "$F" ]; then sed "s#$F#[host]#g"; else cat; fi; } \
+            | sed "s#$H#[host]#g"
+          REMOTE
