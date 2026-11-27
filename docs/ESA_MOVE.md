@@ -50,17 +50,23 @@ sudo -u postgres psql -c "CREATE DATABASE esa OWNER esa_app"
 
 ### 1. Секреты сервиса (`/etc/esa/esa.env`, 600, root:valstan)
 
+Имена переменных — с префиксом `ESA_` (сервис понимает и старые `RADAR_ID_*`
+/ `SETKA_WEB_SECRET` — на случай, если кто-то поднимет его из старой
+конфигурации, но в проде используем новые имена).
+
 ```
-DATABASE_URL=postgresql+asyncpg://esa_app:<пароль>@127.0.0.1:5432/esa
-SETKA_WEB_SECRET=<из комнаты setka>      # подпись сессий и VK-состояния
-SESSION_COOKIE_DOMAIN=.xn--80adkdyec4j.xn--p1ai
-SESSION_COOKIE_SECURE=1
-RADAR_ID_ISSUER=https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai
-RADAR_ID_PRIVATE_KEY_FILE=/home/valstan/vmalmyzhe/esa/keys/radar_id_rs256.pem
-RADAR_ID_VK_APP_ID=<из комнаты setka>
-RADAR_ID_VK_REDIRECT_URI=https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai/auth/vk/callback
+ESA_DATABASE_URL=postgresql+asyncpg://esa_app:<пароль>@127.0.0.1:5432/esa
+ESA_WEB_SECRET=<из комнаты setka>      # подпись сессий и VK-состояния
+ESA_SESSION_COOKIE=setka_session
+ESA_SESSION_COOKIE_DOMAIN=.xn--80adkdyec4j.xn--p1ai
+ESA_SESSION_COOKIE_SECURE=1
+ESA_ISSUER=https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai
+ESA_PRIVATE_KEY_FILE=/home/valstan/vmalmyzhe/esa/keys/radar_id_rs256.pem
+ESA_VK_APP_ID=<из комнаты setka>
+ESA_VK_REDIRECT_URI=https://xn--b1ae3a1a.xn--80adkdyec4j.xn--p1ai/auth/vk/callback
 ESA_INTERNAL_TOKEN=<случайный, общий с порталом>
 ESA_INVITE_CODE=                          # пусто = регистрация открыта
+ESA_LOG_LEVEL=INFO
 ```
 
 Ключ подписи кладётся файлом:

@@ -22,13 +22,13 @@ Wants=postgresql.service
 [Service]
 Type=simple
 User=__DEPLOY_USER__
-WorkingDirectory=/home/__DEPLOY_USER__/vmalmyzhe/esa/current
-# Секреты (DATABASE_URL, SETKA_WEB_SECRET, RADAR_ID_PRIVATE_KEY_FILE, …) — вне
+WorkingDirectory=/home/__DEPLOY_USER__/vmalmyzhe/esa/current/esa
+# Секреты (ESA_DATABASE_URL, ESA_WEB_SECRET, ESA_PRIVATE_KEY_FILE, …) — вне
 # репо (pool #008).
 EnvironmentFile=__PROD_ENV__
 # Ключ подписи RS256 — файлом вне репо; путь в prod-env.
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/__DEPLOY_USER__/vmalmyzhe/esa/current/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+ExecStart=/home/__DEPLOY_USER__/vmalmyzhe/esa/current/esa/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=3
 # Бокс маленький и общий (на нём же портал, карман, тренер): ограничиваем
