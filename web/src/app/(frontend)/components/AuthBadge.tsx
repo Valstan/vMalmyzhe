@@ -35,7 +35,10 @@ export function AuthBadge() {
   if (!me?.enabled) return null
 
   const next = typeof window !== 'undefined' ? window.location.pathname : '/'
-  const startHref = `/api/auth/start?next=${encodeURIComponent(next)}`
+  // Вход ведём на свою страницу портала: там и логин с паролем, и регистрация,
+  // и ВК ID. Прямой редирект в ЕСА (/api/auth/start) оставлен как запасной
+  // путь для клиентов OIDC — из шапки он больше не нужен.
+  const startHref = `/login?next=${encodeURIComponent(next)}`
 
   return (
     <div className="auth-badge">
