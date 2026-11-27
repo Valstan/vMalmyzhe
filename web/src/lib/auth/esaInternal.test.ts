@@ -71,10 +71,31 @@ describe('вход и регистрация', () => {
   it('отказ сервиса приходит кодом, а не исключением', async () => {
     vi.stubEnv('ESA_INTERNAL_URL', 'http://127.0.0.1:8010')
     vi.stubEnv('ESA_INTERNAL_TOKEN', 'shared')
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ code: 'invalid_credentials' }, 401)))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ detail: 'Неверный логин или пароль' }, 401)))
 
     const res = await esaLogin('ivan', 'nope')
     expect(res).toEqual({ ok: false, status: 401, code: 'invalid_credentials' })
+  })
+
+  it('статус отказа разбирается в код: 409 — логин занят, 403 — инвайт', async () => {
+    vi.stubEnv('ESA_INTERNAL_URL', 'http://127.0.0.1:8010')
+    vi.stubEnv('ESA_INTERNAL_TOKEN', 'shared')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    fetchMock.mockResolvedValueOnce(json({ detail: 'занят' }, 409))
+    expect(await esaRegister({ login: 'ivan', password: 'password123' })).toEqual({
+      ok: false,
+      status: 409,
+      code: 'login_taken',
+    })
+
+    fetchMock.mockResolvedValueOnce(json({ detail: 'нужен инвайт-код' }, 403))
+    expect(await esaRegister({ login: 'ivan', password: 'password123' })).toEqual({
+      ok: false,
+      status: 403,
+      code: 'invalid_invite',
+    })
   })
 
   it('сетевой сбой — это unavailable, а не падение', async () => {

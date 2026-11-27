@@ -73,12 +73,23 @@ const esaInternalToken = (): string => (process.env.ESA_INTERNAL_TOKEN || '').tr
 export const esaSessionCookieName = (): string =>
   (process.env.ESA_SESSION_COOKIE_NAME || 'setka_session').trim() || 'setka_session'
 
+// Код отказа по HTTP-статусу: сервис отвечает `detail` текстом, а не машинным
+// кодом, поэтому разбираем сами. Явный `code` в теле — если сервис его всё же
+// пришлёт — приоритетнее.
+const STATUS_CODES: Record<number, string> = {
+  400: 'invalid_request',
+  401: 'invalid_credentials',
+  403: 'invalid_invite',
+  409: 'login_taken',
+  429: 'rate_limited',
+}
+
 const parseFailure = (status: number, body: unknown): EsaAuthFailure => {
-  const code =
+  const explicit =
     body && typeof body === 'object' && 'code' in body && typeof body.code === 'string'
       ? body.code
-      : 'unavailable'
-  return { ok: false, status, code }
+      : null
+  return { ok: false, status, code: explicit ?? STATUS_CODES[status] ?? 'unavailable' }
 }
 
 const call = async (path: string, body?: unknown): Promise<Response | null> => {
