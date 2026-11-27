@@ -116,15 +116,15 @@ jobs:
           REL="$BASE/releases/$SHA"
           mkdir -p "$REL"
           tar xzf /tmp/esa-app.tgz -C "$REL"
-          mkdir -p "$REL/wheelhouse"
-          tar xzf /tmp/esa-wheelhouse.tgz -C "$REL/wheelhouse"
+          mkdir -p "$REL/esa/wheelhouse"
+          tar xzf /tmp/esa-wheelhouse.tgz -C "$REL/esa/wheelhouse"
           rm -f /tmp/esa-app.tgz /tmp/esa-wheelhouse.tgz
           # Окружение создаётся на боксе (venv с pip требует python3-venv,
           # который на боксе доустановлен один раз вручную), а пакеты ставятся
           # ОФЛАЙН из wheelhouse — сети в рантайме не нужно.
-          rm -rf "$REL/.venv"
-          python3 -m venv "$REL/.venv"
-          "$REL/.venv/bin/pip" install --no-index --find-links "$REL/wheelhouse" -r "$REL/esa/requirements.txt"
+          rm -rf "$REL/esa/.venv"
+          python3 -m venv "$REL/esa/.venv"
+          "$REL/esa/.venv/bin/pip" install --no-index --find-links "$REL/esa/wheelhouse" -r "$REL/esa/requirements.txt"
           ln -sfn "$REL" "$BASE/current"
           sudo systemctl restart esa
           # держим последние 5 релизов
