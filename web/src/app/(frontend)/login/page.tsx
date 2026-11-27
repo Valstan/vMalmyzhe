@@ -107,6 +107,15 @@ export default async function LoginPage({ searchParams }: Args) {
           <p className="muted">Вход через ВК ID сейчас недоступен.</p>
         )}
 
+        {/* Запасной путь — классический OIDC-вход через страницу ЕСА. Он работает,
+            даже если внутренний API недоступен: браузер сам уходит на
+            вход.вмалмыже.рф и возвращается сюда с кодом. */}
+        <p className="auth-card__switch">
+          <a href={`/api/auth/start?next=${encodeURIComponent(next)}`}>
+            Войти через единый вход (вход.вмалмыже.рф)
+          </a>
+        </p>
+
         <p className="auth-card__switch">
           {register ? (
             <>
