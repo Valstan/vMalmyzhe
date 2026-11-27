@@ -128,10 +128,25 @@ def create_app() -> FastAPI:
 
         Для внутреннего API это 400 (как в контракте портала), для публичных
         эндпоинтов — стандартные 422 FastAPI (их контракт не менялся).
+
+        ⚠️ Тело ответа собирается вручную, а не через ``exc.errors()``:
+        в ``ctx`` ошибки валидации лежат несериализуемые объекты (например,
+        байты из pydantic-контекста), и ``json.dumps`` на них падает — а падение
+        обработчика отдаёт 500 вместо 422, то есть клиент получает «сервер
+        сломан» вместо «плохой запрос». Ловили на живом входе: клиент послал
+        тело не в том формате → 422 → 500.
         """
         if request.url.path.startswith(INTERNAL_PREFIX):
             return JSONResponse({"detail": "Некорректные данные запроса"}, status_code=400)
-        return JSONResponse({"detail": exc.errors()}, status_code=422)
+        items = [
+            {
+                "loc": [str(part) for part in err.get("loc", ())],
+                "msg": str(err.get("msg", "")),
+                "type": str(err.get("type", "")),
+            }
+            for err in exc.errors()
+        ]
+        return JSONResponse({"detail": items}, status_code=422)
 
     return app
 
