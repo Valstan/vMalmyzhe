@@ -1,0 +1,12 @@
+# Локальное окружение сервиса — в репозиторий не попадает.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.smoke/
+*.db
+*.sqlite3
+.env
+.env.*
+!.env.example

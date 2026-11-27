@@ -1,0 +1,634 @@
+"""Ядро OIDC-провайдера ЕСА: коды, токены, PKCE, ротация refresh.
+
+Перенесено из ``modules/radar_id/service.py`` Сарафана. Семантика эндпоинтов,
+коды ошибок и HTTP-статусы — те же: от них зависят живые клиенты (trener,
+Сабантуй, Казанская, портал).
+
+Безопасность:
+- authorization code: single-use (``used_at``), TTL ~60с, хранится sha256;
+- PKCE S256 обязателен для public-клиентов, поддержан для confidential;
+- access/id_token — короткие RS256 JWT (kid в header);
+- refresh: непрозрачный токен (sha256 в БД), ротация на каждый refresh,
+  family-based reuse-detection: предъявление уже погашенного токена
+  отзывает всю family.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import secrets
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from authlib.jose import jwt
+from authlib.oauth2.rfc7636 import create_s256_code_challenge
+from sqlalchemy import select, update
+
+from ..auth import verify_password
+from ..clock import utcnow
+from ..config import (
+    SUPPORTED_SCOPES,
+    get_access_token_ttl,
+    get_auth_code_ttl,
+    get_issuer,
+    get_refresh_ttl_days,
+)
+from ..models import OAuthAuthCode, OAuthClient, OAuthRefreshToken, RadarUser
+from .keys import get_kid, get_public_jwks, get_signing_key
+
+logger = logging.getLogger(__name__)
+audit = logging.getLogger("esa.audit")
+
+
+class OidcError(Exception):
+    """Протокольная ошибка OIDC (код по RFC 6749 + человекочитаемое описание)."""
+
+    def __init__(self, error: str, description: str = ""):
+        super().__init__(description or error)
+        self.error = error
+        self.description = description
+
+
+@dataclass
+class TokenBundle:
+    """Ответ token-эндпоинта."""
+
+    access_token: str
+    id_token: Optional[str]
+    refresh_token: Optional[str]
+    expires_in: int
+    scope: str
+    token_type: str = "Bearer"
+
+    def as_response(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "access_token": self.access_token,
+            "token_type": self.token_type,
+            "expires_in": self.expires_in,
+            "scope": self.scope,
+        }
+        if self.id_token:
+            out["id_token"] = self.id_token
+        if self.refresh_token:
+            out["refresh_token"] = self.refresh_token
+        return out
+
+
+def _sha256(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _utcnow() -> datetime:
+    return utcnow()
+
+
+# ---------------------------------------------------------------------------
+# Клиенты и scopes
+# ---------------------------------------------------------------------------
+
+
+async def get_client(session, client_id: str) -> Optional[OAuthClient]:
+    if not client_id:
+        return None
+    row = (
+        await session.execute(
+            select(OAuthClient).where(
+                OAuthClient.client_id == client_id, OAuthClient.is_active.is_(True)
+            )
+        )
+    ).scalar_one_or_none()
+    return row
+
+
+async def authenticate_client(session, client_id: str, client_secret: Optional[str]) -> OAuthClient:
+    """Аутентификация клиента на token-эндпоинте.
+
+    Confidential — обязателен верный secret (scrypt-hash в БД);
+    public (без secret_hash) — client_id + PKCE (проверяется на обмене кода).
+    """
+    client = await get_client(session, client_id)
+    if client is None:
+        raise OidcError("invalid_client", "unknown client_id")
+    if client.is_confidential:
+        if not client_secret or not client.client_secret_hash:
+            raise OidcError("invalid_client", "client authentication required")
+        if not verify_password(client_secret, client.client_secret_hash):
+            raise OidcError("invalid_client", "bad client credentials")
+    return client
+
+
+def resolve_scope(client: OAuthClient, requested: str) -> str:
+    """Пересечение requested ∩ allowed(client) ∩ SUPPORTED; openid обязателен.
+
+    Порядок канонический (по SUPPORTED_SCOPES) — детерминизм для тестов/логов.
+    """
+    req = set((requested or "").split())
+    if "openid" not in req:
+        raise OidcError("invalid_scope", "scope must include openid")
+    allowed = set(client.scope_list()) & set(SUPPORTED_SCOPES)
+    granted = req & allowed
+    if "openid" not in granted:
+        raise OidcError("invalid_scope", "client is not allowed to use openid")
+    return " ".join(s for s in SUPPORTED_SCOPES if s in granted)
+
+
+def validate_redirect_uri(client: OAuthClient, redirect_uri: str) -> None:
+    """Точное совпадение с allowlist'ом (символ-в-символ, punycode — G108)."""
+    uris = client.redirect_uris or []
+    if not redirect_uri or redirect_uri not in uris:
+        raise OidcError("invalid_request", "redirect_uri is not registered for this client")
+
+
+# ---------------------------------------------------------------------------
+# Свежесть аутентификации: prompt и max_age (OIDC Core §3.1.2.1)
+# ---------------------------------------------------------------------------
+#
+# Что ЕСА умеет на самом деле. `consent` и `select_account` сюда не входят
+# СОЗНАТЕЛЬНО: consent-экрана нет (клиенты first-party, ADR-0002 §8), выбора
+# аккаунта нет тоже. Спек в этом случае требует не «тихо проигнорировать», а
+# вернуть клиенту честный отказ — `consent_required` / `account_selection_required`.
+PROMPT_SUPPORTED = frozenset({"none", "login"})
+PROMPT_KNOWN = PROMPT_SUPPORTED | frozenset({"consent", "select_account"})
+
+_PROMPT_REFUSAL = {
+    "consent": ("consent_required", "consent screen is not implemented"),
+    "select_account": ("account_selection_required", "account selection is not implemented"),
+}
+
+
+def parse_prompt(raw: Optional[str]) -> frozenset:
+    """Разобрать параметр ``prompt`` (space-delimited, регистрозависимый).
+
+    Неизвестное значение — `invalid_request`: молча съесть его нельзя, иначе
+    клиент решит, что его требование выполнено. По той же причине `none`
+    вместе с чем-либо ещё — ошибка: «не показывай UI» и «покажи UI»
+    одновременно неисполнимы.
+    """
+    values = frozenset((raw or "").split())
+    if not values:
+        return frozenset()
+    unknown = values - PROMPT_KNOWN
+    if unknown:
+        raise OidcError("invalid_request", f"unsupported prompt value: {' '.join(sorted(unknown))}")
+    if "none" in values and len(values) > 1:
+        raise OidcError("invalid_request", "prompt=none cannot be combined with other values")
+    for value, (error, description) in _PROMPT_REFUSAL.items():
+        if value in values:
+            raise OidcError(error, description)
+    return values
+
+
+def parse_max_age(raw: Optional[str]) -> Optional[int]:
+    """``max_age`` в секундах: неотрицательное целое либо отсутствует."""
+    if raw is None or raw == "":
+        return None
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        raise OidcError("invalid_request", "max_age must be an integer number of seconds")
+    if seconds < 0:
+        raise OidcError("invalid_request", "max_age must not be negative")
+    return seconds
+
+
+def needs_reauth(
+    *,
+    prompt: frozenset,
+    max_age: Optional[int],
+    auth_time: Optional[datetime],
+    now: Optional[datetime] = None,
+    reauth_since: Optional[datetime] = None,
+) -> bool:
+    """Нужна ли СВЕЖАЯ аутентификация для этого запроса.
+
+    Два независимых требования, оба сводятся к «вход должен быть новее X»:
+
+    * ``max_age=N`` — вход не старше N секунд. Неизвестное время входа
+      (сессия без ``iat``) требование **не выполняет**: доказать свежесть
+      нечем, а клиент попросил именно доказательство;
+    * ``prompt=login`` — вход должен произойти **заново, в рамках этого
+      запроса**. Точка отсчёта приезжает в ``reauth_since`` (подписанная
+      метка, поставленная при первом заходе на этот же authorize). Без метки
+      требование не выполнено никогда — иначе достаточно старой сессии, и
+      `prompt=login` превращается в украшение.
+
+    Функция ничего не делает и ни на что не смотрит, кроме аргументов, —
+    решение о редиректе принимает HTTP-слой.
+    """
+    now = now or _utcnow()
+    if max_age is not None:
+        if auth_time is None or (now - auth_time).total_seconds() > max_age:
+            return True
+    if "login" in prompt:
+        if auth_time is None or reauth_since is None or auth_time < reauth_since:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Authorization code
+# ---------------------------------------------------------------------------
+
+
+async def issue_auth_code(
+    session,
+    *,
+    client: OAuthClient,
+    user: RadarUser,
+    redirect_uri: str,
+    scope: str,
+    code_challenge: Optional[str],
+    code_challenge_method: Optional[str],
+    nonce: Optional[str],
+    auth_time: Optional[datetime] = None,
+) -> str:
+    """Выдать одноразовый authorization code (возвращает сырой код).
+
+    ``auth_time`` — когда человек РЕАЛЬНО аутентифицировался (``iat`` его
+    сессии). ``None`` (старая cookie без ``iat``) сохраняется как ``NULL`` и в
+    ID-токен не попадает — отсутствующий claim честнее подставленного.
+    """
+    if code_challenge:
+        if (code_challenge_method or "S256") != "S256":
+            raise OidcError("invalid_request", "only S256 code_challenge_method is supported")
+    elif not client.is_confidential:
+        # Public-клиент без PKCE — запрещено (MUST).
+        raise OidcError("invalid_request", "PKCE (S256) is required for public clients")
+
+    raw = secrets.token_urlsafe(32)
+    now = _utcnow()
+    session.add(
+        OAuthAuthCode(
+            code_hash=_sha256(raw),
+            client_id=client.client_id,
+            user_id=user.id,
+            redirect_uri=redirect_uri,
+            scope=scope,
+            code_challenge=code_challenge,
+            code_challenge_method="S256" if code_challenge else None,
+            nonce=nonce,
+            auth_time=auth_time,
+            expires_at=now + timedelta(seconds=get_auth_code_ttl()),
+        )
+    )
+    await session.commit()
+    audit.info(
+        "authorize: code issued client=%s sub=%s scope=%s", client.client_id, user.sub, scope
+    )
+    return raw
+
+
+# ---------------------------------------------------------------------------
+# Подпись токенов
+# ---------------------------------------------------------------------------
+
+
+def _sign(payload: Dict[str, Any]) -> str:
+    header = {"alg": "RS256", "kid": get_kid()}
+    return jwt.encode(header, payload, get_signing_key()).decode()
+
+
+def _id_token_claims(
+    user: RadarUser,
+    client_id: str,
+    scope: str,
+    *,
+    nonce: Optional[str],
+    auth_time: Optional[datetime],
+) -> Dict[str, Any]:
+    """Claims ID-токена. ``auth_time`` заявляется, только если он известен.
+
+    OIDC Core §2 делает `auth_time` обязательным лишь когда клиент попросил
+    (`max_age` / `auth_time` в essential claims) — а вот НЕВЕРНЫЙ `auth_time`
+    не разрешён никогда: на нём клиент строит решение «пора ли переспросить
+    пароль». Поэтому неизвестное время входа (сессия, выданная до появления
+    ``iat``) даёт отсутствующий claim, а не подставленное «сейчас».
+    """
+    now = int(time.time())
+    claims: Dict[str, Any] = {
+        "iss": get_issuer(),
+        "sub": user.sub,
+        "aud": client_id,
+        "iat": now,
+        "exp": now + get_access_token_ttl(),
+    }
+    if auth_time is not None:
+        claims["auth_time"] = int(auth_time.timestamp())
+    if nonce:
+        claims["nonce"] = nonce
+    scopes = scope.split()
+    # Claims-минимизация (152-ФЗ): только то, что покрыто granted-scope.
+    if "email" in scopes and user.email:
+        claims["email"] = user.email
+        claims["email_verified"] = bool(user.email_verified)
+    if "profile" in scopes:
+        claims["name"] = user.display_name or user.login or ""
+    return claims
+
+
+def _access_token_claims(user: RadarUser, client_id: str, scope: str) -> Dict[str, Any]:
+    now = int(time.time())
+    return {
+        "iss": get_issuer(),
+        "sub": user.sub,
+        "aud": get_issuer(),  # access предъявляется нашему же /userinfo
+        "client_id": client_id,
+        "scope": scope,
+        "iat": now,
+        "exp": now + get_access_token_ttl(),
+        "jti": secrets.token_urlsafe(8),
+    }
+
+
+async def _new_refresh_token(
+    session,
+    *,
+    user_id: int,
+    client_id: str,
+    scope: str,
+    family_id: Optional[str] = None,
+    rotated_from: Optional[int] = None,
+    auth_time: Optional[datetime] = None,
+) -> str:
+    """Новый refresh-токен. ``auth_time`` едет по цепочке ротаций неизменным.
+
+    Обновление токена — не аутентификация: человек в этот момент ничего не
+    доказывает, работает машина клиента. Поэтому время входа **переносится**
+    из погашенного токена, а не берётся от «сейчас», иначе через сутки
+    обновлений `auth_time` будет утверждать, что вход только что состоялся.
+    """
+    raw = secrets.token_urlsafe(48)
+    session.add(
+        OAuthRefreshToken(
+            token_hash=_sha256(raw),
+            family_id=family_id or str(uuid.uuid4()),
+            user_id=user_id,
+            client_id=client_id,
+            scope=scope,
+            rotated_from=rotated_from,
+            auth_time=auth_time,
+            expires_at=_utcnow() + timedelta(days=get_refresh_ttl_days()),
+        )
+    )
+    return raw
+
+
+# ---------------------------------------------------------------------------
+# Grants
+# ---------------------------------------------------------------------------
+
+
+async def exchange_code(
+    session,
+    *,
+    client: OAuthClient,
+    raw_code: str,
+    redirect_uri: str,
+    code_verifier: Optional[str],
+) -> TokenBundle:
+    """Grant ``authorization_code``: код → id_token + access + refresh."""
+    row: Optional[OAuthAuthCode] = (
+        await session.execute(
+            select(OAuthAuthCode).where(OAuthAuthCode.code_hash == _sha256(raw_code or ""))
+        )
+    ).scalar_one_or_none()
+    if row is None or row.client_id != client.client_id:
+        raise OidcError("invalid_grant", "unknown authorization code")
+    if row.used_at is not None:
+        # Повторный обмен кода — признак перехвата; код уже отработал.
+        audit.warning(
+            "token: code REUSE detected client=%s user_id=%s", client.client_id, row.user_id
+        )
+        raise OidcError("invalid_grant", "authorization code already used")
+    if row.expires_at < _utcnow():
+        raise OidcError("invalid_grant", "authorization code expired")
+    if row.redirect_uri != (redirect_uri or ""):
+        raise OidcError("invalid_grant", "redirect_uri mismatch")
+
+    if row.code_challenge:
+        if not code_verifier:
+            raise OidcError("invalid_grant", "code_verifier required")
+        if create_s256_code_challenge(code_verifier) != row.code_challenge:
+            raise OidcError("invalid_grant", "PKCE verification failed")
+    elif not client.is_confidential:
+        raise OidcError("invalid_grant", "PKCE required for public client")
+
+    user = await session.get(RadarUser, row.user_id)
+    if user is None or not user.is_active:
+        raise OidcError("invalid_grant", "user is not active")
+
+    row.used_at = _utcnow()
+    refresh_raw = await _new_refresh_token(
+        session,
+        user_id=user.id,
+        client_id=client.client_id,
+        scope=row.scope,
+        auth_time=row.auth_time,
+    )
+    await session.commit()
+
+    audit.info(
+        "token: code exchanged client=%s sub=%s scope=%s", client.client_id, user.sub, row.scope
+    )
+    return TokenBundle(
+        access_token=_sign(_access_token_claims(user, client.client_id, row.scope)),
+        id_token=_sign(
+            _id_token_claims(
+                user, client.client_id, row.scope, nonce=row.nonce, auth_time=row.auth_time
+            )
+        ),
+        refresh_token=refresh_raw,
+        expires_in=get_access_token_ttl(),
+        scope=row.scope,
+    )
+
+
+async def refresh_grant(session, *, client: OAuthClient, raw_refresh: str) -> TokenBundle:
+    """Grant ``refresh_token``: ротация + family reuse-detection (MUST §5.2)."""
+    row: Optional[OAuthRefreshToken] = (
+        await session.execute(
+            select(OAuthRefreshToken).where(
+                OAuthRefreshToken.token_hash == _sha256(raw_refresh or "")
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None or row.client_id != client.client_id:
+        raise OidcError("invalid_grant", "unknown refresh token")
+
+    if row.revoked_at is not None:
+        # Reuse погашенного токена → компрометация: гасим ВСЮ family.
+        await session.execute(
+            update(OAuthRefreshToken)
+            .where(
+                OAuthRefreshToken.family_id == row.family_id,
+                OAuthRefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=_utcnow())
+        )
+        await session.commit()
+        audit.warning(
+            "token: refresh REUSE — family %s revoked (client=%s user_id=%s)",
+            row.family_id,
+            client.client_id,
+            row.user_id,
+        )
+        raise OidcError("invalid_grant", "refresh token reuse detected; session revoked")
+
+    if row.expires_at < _utcnow():
+        raise OidcError("invalid_grant", "refresh token expired")
+
+    user = await session.get(RadarUser, row.user_id)
+    if user is None or not user.is_active:
+        raise OidcError("invalid_grant", "user is not active")
+
+    row.revoked_at = _utcnow()  # ротация: старый гасим, новый выдаём в той же family
+    new_raw = await _new_refresh_token(
+        session,
+        user_id=user.id,
+        client_id=client.client_id,
+        scope=row.scope,
+        family_id=row.family_id,
+        rotated_from=row.id,
+        auth_time=row.auth_time,
+    )
+    await session.commit()
+
+    audit.info("token: refresh rotated client=%s sub=%s", client.client_id, user.sub)
+    return TokenBundle(
+        access_token=_sign(_access_token_claims(user, client.client_id, row.scope)),
+        id_token=_sign(
+            _id_token_claims(user, client.client_id, row.scope, nonce=None, auth_time=row.auth_time)
+        ),
+        refresh_token=new_raw,
+        expires_in=get_access_token_ttl(),
+        scope=row.scope,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Userinfo
+# ---------------------------------------------------------------------------
+
+
+async def userinfo(session, bearer_token: str) -> Dict[str, Any]:
+    """Claims по access-токену (RS256 JWT, aud=issuer)."""
+    try:
+        claims = jwt.decode(bearer_token, get_public_jwks())
+        claims.validate(now=int(time.time()))
+    except Exception as e:
+        raise OidcError("invalid_token", f"access token invalid: {e}") from e
+    if claims.get("iss") != get_issuer() or claims.get("aud") != get_issuer():
+        raise OidcError("invalid_token", "wrong issuer/audience")
+
+    user: Optional[RadarUser] = (
+        await session.execute(select(RadarUser).where(RadarUser.sub == claims.get("sub")))
+    ).scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise OidcError("invalid_token", "user is not active")
+
+    scopes: List[str] = str(claims.get("scope") or "").split()
+    out: Dict[str, Any] = {"sub": user.sub}
+    if "email" in scopes and user.email:
+        out["email"] = user.email
+        out["email_verified"] = bool(user.email_verified)
+    if "profile" in scopes:
+        out["name"] = user.display_name or user.login or ""
+    return out
+
+
+# ---------------------------------------------------------------------------
+# RP-initiated logout (OIDC RP-Initiated Logout 1.0, минимальный профиль)
+# ---------------------------------------------------------------------------
+#
+# Зачем. Сессия ЕСА живёт кукой домена ``.вмалмыже.рф``; «Выйти» на сайте-клиенте
+# гасит только его сессию, и следующий ``authorize`` молча авторизует снова.
+# ``end_session_endpoint`` даёт клиенту одну строку в его logout: редирект сюда
+# после локального выхода.
+#
+# Куда возвращать. Отдельного реестра ``post_logout_redirect_uris`` у клиентов
+# нет: возврат разрешён на ORIGIN любого зарегистрированного ``redirect_uri``
+# клиента — та же зона доверия, что и для кода. Не совпало / клиент не назван —
+# уводим на свою страницу входа, ошибкой в чужой адрес не отвечаем
+# (open-redirect через logout — классика).
+
+
+def _origin(url: str) -> str:
+    """``scheme://host[:port]`` в нижнем регистре; битый URL → пусто."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit((url or "").strip())
+    except ValueError:
+        return ""
+    if parts.scheme not in ("https", "http") or not parts.hostname:
+        return ""
+    host = parts.hostname.lower()
+    return f"{parts.scheme}://{host}:{parts.port}" if parts.port else f"{parts.scheme}://{host}"
+
+
+def post_logout_redirect_allowed(client: Optional[OAuthClient], uri: str) -> bool:
+    """Разрешён ли возврат на ``uri`` после выхода: origin ∈ origins(redirect_uris)."""
+    if client is None or not uri:
+        return False
+    target = _origin(uri)
+    if not target:
+        return False
+    return any(_origin(str(u)) == target for u in (client.redirect_uris or []))
+
+
+def client_id_from_id_token_hint(id_token_hint: Optional[str]) -> Optional[str]:
+    """``aud`` из ``id_token_hint`` — подпись проверяем, срок НЕ проверяем.
+
+    Протухший id_token — штатный случай для logout (человек ушёл через час), а
+    подпись обязана сойтись: иначе любой мог бы назвать чужой ``client_id``.
+    Не разобралось — ``None``, и logout идёт без возврата к клиенту.
+    """
+    if not id_token_hint:
+        return None
+    try:
+        claims = jwt.decode(id_token_hint, get_public_jwks())
+    except Exception:  # noqa: BLE001 — любая порча токена = «подсказки нет»
+        return None
+    if claims.get("iss") != get_issuer():
+        return None
+    aud = claims.get("aud")
+    if isinstance(aud, list):
+        aud = aud[0] if aud else None
+    return str(aud) if aud else None
+
+
+# ---------------------------------------------------------------------------
+# Discovery
+# ---------------------------------------------------------------------------
+
+
+def discovery_document() -> Dict[str, Any]:
+    issuer = get_issuer()
+    return {
+        "issuer": issuer,
+        "authorization_endpoint": f"{issuer}/oidc/authorize",
+        "token_endpoint": f"{issuer}/oidc/token",
+        "userinfo_endpoint": f"{issuer}/oidc/userinfo",
+        "end_session_endpoint": f"{issuer}/oidc/logout",
+        "jwks_uri": f"{issuer}/.well-known/jwks.json",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "scopes_supported": list(SUPPORTED_SCOPES),
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["RS256"],
+        "code_challenge_methods_supported": ["S256"],
+        # Объявляем ровно то, что исполняем. `consent`/`select_account` сюда не
+        # попадают: экранов нет, и запрос с ними получает честный отказ, а не
+        # тихо проигнорированный параметр (см. PROMPT_SUPPORTED).
+        "prompt_values_supported": sorted(PROMPT_SUPPORTED),
+        "token_endpoint_auth_methods_supported": [
+            "client_secret_post",
+            "client_secret_basic",
+            "none",
+        ],
+        "claims_supported": ["sub", "email", "email_verified", "name"],
+    }

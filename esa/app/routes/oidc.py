@@ -1,0 +1,501 @@
+"""HTTP-слой ЕСА: OIDC-эндпоинты.
+
+Маршруты (абсолютные, без префикса — discovery требует канонических путей):
+- ``GET /.well-known/openid-configuration`` — discovery (public);
+- ``GET /.well-known/jwks.json`` — публичные ключи (public, офлайн-валидация);
+- ``GET /oidc/authorize`` — вход в code-flow; требует сессию;
+- ``POST /oidc/token`` — обмен кода / refresh (public, своя client-auth);
+- ``GET /oidc/userinfo`` — claims по Bearer access-токену (public);
+- ``GET|POST /oidc/logout`` — RP-initiated logout: гасит сессию ЕСА и, если
+  клиент назван (``client_id`` или ``id_token_hint``) и адрес в его зоне,
+  возвращает на ``post_logout_redirect_uri``;
+- ``GET /auth/vk/login`` и ``GET /auth/vk/callback`` — вход через ВКонтакте.
+
+Семантика (коды ошибок, редиректы, статусы) — как в Сарафане: от неё зависят
+живые клиенты (trener, Сабантуй, Казанская, портал).
+
+Отличие от Сарафана: страница входа ЕСА живёт на ``/`` (и на ``/login`` — тот
+же адрес для совместимости с клиентами, которые строят
+``{issuer}/login?next=...``), поэтому редиректы «без сессии» ведут на ``/``.
+
+Consent: клиенты ЕСА регистрируются вручную оператором и все — first-party
+экосистемы (ADR-0002 §8), поэтому согласие неявное (auto-approve).
+
+Rate-limit (MUST §5.3): fixed-window per-IP, счётчик в процессе (Redis в
+сервисе нет) — ``app/rate_limit.py``.
+"""
+
+from __future__ import annotations
+
+import base64
+import logging
+from typing import Optional
+from urllib.parse import quote, urlencode
+
+from fastapi import APIRouter, Form, Header, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
+
+from ..auth import issue_reauth_marker, read_reauth_marker, session_cookie_name
+from ..clock import from_timestamp
+from ..config import (
+    esa_disabled,
+    get_session_cookie_domain,
+    get_session_cookie_secure,
+)
+from ..db import session_scope
+from ..oidc import service
+from ..oidc.keys import get_public_jwks
+from ..oidc.service import OidcError
+from ..rate_limit import get_limiter
+
+logger = logging.getLogger(__name__)
+_audit = logging.getLogger("esa.audit")
+
+router = APIRouter()
+
+# Щедрые лимиты для login-трафика: люди, не боты. Разделяем окна authorize
+# (браузерные редиректы) и token (серверные обмены).
+RATE_PER_MIN = 30
+RATE_PER_DAY = 2000
+
+# Страница входа ЕСА.
+LOGIN_PATH = "/"
+
+
+def _check_enabled() -> None:
+    if esa_disabled():
+        raise HTTPException(status_code=503, detail="esa disabled")
+
+
+def _enforce_ip_rate(request: Request, bucket: str) -> None:
+    """Fixed-window лимит по IP (в процессе — см. app/rate_limit.py)."""
+    ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = get_limiter().check(bucket, ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Discovery / JWKS
+# ---------------------------------------------------------------------------
+
+
+@router.get("/.well-known/openid-configuration")
+async def openid_configuration():
+    _check_enabled()
+    return service.discovery_document()
+
+
+@router.get("/.well-known/jwks.json")
+async def jwks():
+    _check_enabled()
+    try:
+        return get_public_jwks()
+    except Exception as e:
+        # Ключ не настроен — громко, но без утечки путей.
+        logger.error("esa: jwks unavailable: %s", e)
+        raise HTTPException(status_code=503, detail="signing key unavailable")
+
+
+# ---------------------------------------------------------------------------
+# Authorize
+# ---------------------------------------------------------------------------
+
+
+def _error_redirect(redirect_uri: str, error: str, description: str, state: Optional[str]):
+    params = {"error": error}
+    if description:
+        params["error_description"] = description
+    if state:
+        params["state"] = state
+    sep = "&" if "?" in redirect_uri else "?"
+    return RedirectResponse(f"{redirect_uri}{sep}{urlencode(params)}", status_code=302)
+
+
+# Имя нашего служебного параметра в URL authorize. Клиент его не присылает и
+# не видит: ЕСА сам дописывает его, уводя человека переспрашивать вход, и сам
+# же читает на возврате. Подчёркивание в начале — чтобы не столкнуться с
+# будущим параметром спека.
+REAUTH_PARAM = "_reauth"
+
+
+def _is_prompt_none(raw: Optional[str]) -> bool:
+    """`prompt=none` буквально, без разбора остального.
+
+    Нужен ДО валидации клиента, поэтому разбирать полноценно нечем и незачем:
+    ошибки формата обработает ``service.parse_prompt`` ниже, когда будет куда
+    их отправить.
+    """
+    return "none" in (raw or "").split()
+
+
+def _reauth_redirect(request: Request):
+    """Увести на страницу входа с подписанной меткой «отсчёт свежести — отсюда».
+
+    Возвращаемся ровно на этот же authorize (со всеми параметрами клиента),
+    дописав метку. Без метки на возврате старая сессия снова не годилась бы —
+    и человек ходил бы по кругу login → authorize → login.
+    """
+    params = [(k, v) for k, v in request.query_params.multi_items() if k != REAUTH_PARAM]
+    params.append((REAUTH_PARAM, issue_reauth_marker()))
+    back = f"{request.url.path}?{urlencode(params)}"
+    return RedirectResponse(f"{LOGIN_PATH}?next={quote(back, safe='')}&reauth=1", status_code=302)
+
+
+@router.get("/oidc/authorize")
+async def authorize(
+    request: Request,
+    response_type: str = "",
+    client_id: str = "",
+    redirect_uri: str = "",
+    scope: str = "",
+    state: Optional[str] = None,
+    nonce: Optional[str] = None,
+    code_challenge: Optional[str] = None,
+    code_challenge_method: Optional[str] = None,
+    prompt: Optional[str] = None,
+    max_age: Optional[str] = None,
+):
+    _check_enabled()
+    _enforce_ip_rate(request, "authorize")
+
+    user = getattr(request.state, "user", None)
+    # `user is None` возможен ровно в одном случае — `prompt=none` у гостя:
+    # такие запросы доходят сюда вместо редиректа на страницу входа, потому
+    # что «не показывать UI» и «показать страницу входа» несовместимы. Ответ
+    # гостю даётся ниже, ПОСЛЕ проверки client_id и redirect_uri: раньше
+    # отвечать некуда, непроверенный uri — это open-redirect.
+    unauthenticated = user is None
+    if unauthenticated and not _is_prompt_none(prompt):
+        # Гость без prompt=none → на страницу входа (302, как в Сарафане).
+        next_url = request.url.path
+        if request.url.query:
+            next_url += f"?{request.url.query}"
+        return RedirectResponse(
+            f"{LOGIN_PATH}?next={quote(next_url, safe='')}", status_code=302
+        )
+
+    async with session_scope() as session:
+        client = await service.get_client(session, client_id)
+        # Ошибки клиента/redirect_uri НИКОГДА не редиректим на непроверенный
+        # uri — только 400 (иначе open-redirect).
+        if client is None:
+            raise HTTPException(status_code=400, detail="unknown client_id")
+        try:
+            service.validate_redirect_uri(client, redirect_uri)
+        except OidcError as e:
+            raise HTTPException(status_code=400, detail=e.description)
+
+        if response_type != "code":
+            return _error_redirect(
+                redirect_uri, "unsupported_response_type", "only code is supported", state
+            )
+        try:
+            granted = service.resolve_scope(client, scope)
+            # `prompt`/`max_age` — требования клиента к СВЕЖЕСТИ входа.
+            # Неизвестный prompt и `consent`/`select_account` (их у нас нет)
+            # бросают OidcError и уезжают клиенту ошибкой, а не молча теряются.
+            wanted_prompt = service.parse_prompt(prompt)
+            wanted_max_age = service.parse_max_age(max_age)
+            # Время входа берём из сессии (её `iat`), а не из «сейчас»: момент
+            # выдачи кода — это момент, когда клиент прислал пользователя, а не
+            # когда тот доказал, кто он. Cookie без `iat` даёт None → claim
+            # `auth_time` не заявляется.
+            session_iat = getattr(request.state, "session_iat", None)
+            auth_time = from_timestamp(session_iat) if session_iat else None
+
+            if unauthenticated:
+                # prompt=none у гостя: показывать нечего, врать нечем.
+                raise OidcError("login_required", "no active session and prompt=none")
+
+            reauth_at = read_reauth_marker(request.query_params.get(REAUTH_PARAM))
+            if service.needs_reauth(
+                prompt=wanted_prompt,
+                max_age=wanted_max_age,
+                auth_time=auth_time,
+                reauth_since=(from_timestamp(reauth_at) if reauth_at else None),
+            ):
+                if "none" in wanted_prompt:
+                    raise OidcError("login_required", "authentication is too old and prompt=none")
+                return _reauth_redirect(request)
+
+            raw_code = await service.issue_auth_code(
+                session,
+                client=client,
+                user=user,
+                redirect_uri=redirect_uri,
+                scope=granted,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                nonce=nonce,
+                auth_time=auth_time,
+            )
+        except OidcError as e:
+            return _error_redirect(redirect_uri, e.error, e.description, state)
+
+    params = {"code": raw_code}
+    if state:
+        params["state"] = state
+    sep = "&" if "?" in redirect_uri else "?"
+    return RedirectResponse(f"{redirect_uri}{sep}{urlencode(params)}", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Token
+# ---------------------------------------------------------------------------
+
+
+def _client_creds_from_basic(authorization: Optional[str]):
+    """client_secret_basic: Authorization: Basic b64(client_id:secret)."""
+    if not authorization or not authorization.lower().startswith("basic "):
+        return None, None
+    try:
+        raw = base64.b64decode(authorization.split(" ", 1)[1]).decode()
+        cid, _, secret = raw.partition(":")
+        return cid or None, secret or None
+    except Exception:
+        return None, None
+
+
+@router.post("/oidc/token")
+async def token(
+    request: Request,
+    grant_type: str = Form(""),
+    code: str = Form(""),
+    redirect_uri: str = Form(""),
+    code_verifier: Optional[str] = Form(None),
+    refresh_token: str = Form(""),
+    client_id: str = Form(""),
+    client_secret: Optional[str] = Form(None),
+    authorization: Optional[str] = Header(None),
+):
+    _check_enabled()
+    _enforce_ip_rate(request, "token")
+
+    basic_id, basic_secret = _client_creds_from_basic(authorization)
+    cid = basic_id or client_id
+    secret = basic_secret if basic_id else client_secret
+
+    async with session_scope() as session:
+        try:
+            client = await service.authenticate_client(session, cid, secret)
+            if grant_type == "authorization_code":
+                bundle = await service.exchange_code(
+                    session,
+                    client=client,
+                    raw_code=code,
+                    redirect_uri=redirect_uri,
+                    code_verifier=code_verifier,
+                )
+            elif grant_type == "refresh_token":
+                bundle = await service.refresh_grant(
+                    session, client=client, raw_refresh=refresh_token
+                )
+            else:
+                raise OidcError("unsupported_grant_type", f"grant_type={grant_type!r}")
+        except OidcError as e:
+            status = 401 if e.error == "invalid_client" else 400
+            return JSONResponse(
+                {"error": e.error, "error_description": e.description},
+                status_code=status,
+                headers={"Cache-Control": "no-store"},
+            )
+
+    return JSONResponse(bundle.as_response(), headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------------------
+# ВК-вход (upstream R16): /auth/vk/login → id.vk.ru → /auth/vk/callback
+# ---------------------------------------------------------------------------
+
+
+@router.get("/auth/vk/login")
+async def vk_login(request: Request, next: str = "/"):  # noqa: A002 - query name
+    """Старт ВК-входа: PKCE+state в подписанную cookie → redirect на id.vk.ru.
+
+    ``next`` привязываем к хосту, с которого вход начали: callback по устройству
+    единого входа всегда приземляется на issuer (``вход.вмалмыже.рф``), и там
+    родной хост сервиса уже не восстановить. Здесь же ``request.base_url`` — ещё
+    родной хост сервиса, поэтому origin запоминаем в state вместе с путём.
+    """
+    _check_enabled()
+    _enforce_ip_rate(request, "vk-login")
+    from ..oidc import vk_upstream
+
+    next_target = vk_upstream.absolutize_next(next, request.url.hostname)
+
+    try:
+        url, blob = vk_upstream.build_vk_authorize(next_target)
+    except vk_upstream.VkUpstreamError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    resp = RedirectResponse(url, status_code=302)
+    resp.set_cookie(
+        vk_upstream.OAUTH_STATE_COOKIE,
+        blob,
+        max_age=vk_upstream.OAUTH_STATE_TTL,
+        httponly=True,
+        samesite="lax",  # cookie должна вернуться на top-level redirect от VK
+        secure=get_session_cookie_secure(),
+        # Кука обязана пережить переезд между поддоменами: вход можно начать с
+        # сервисного поддомена (кнопка «Войти через ВК» относительная), а
+        # callback по устройству единого входа ВСЕГДА приземляется на issuer.
+        # Расширение домена ничего не ослабляет: blob подписан HMAC и живёт
+        # 10 минут (app/oidc/vk_upstream.py).
+        domain=get_session_cookie_domain(),
+    )
+    return resp
+
+
+@router.get("/auth/vk/callback")
+async def vk_callback(
+    request: Request,
+    code: str = "",
+    device_id: str = "",
+    state: str = "",
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+):
+    """Callback VK ID: обмен кода (device_id обязателен — R16) → сессия → next."""
+    _check_enabled()
+    _enforce_ip_rate(request, "vk-callback")
+    from ..oidc import vk_upstream
+    from .auth import set_session_cookie
+
+    def _fail(msg: str):
+        logger.warning("vk-callback rejected: %s", msg)
+        return RedirectResponse(f"{LOGIN_PATH}?error={quote(msg)}", status_code=302)
+
+    if error:
+        return _fail(error_description or error)
+
+    blob = request.cookies.get(vk_upstream.OAUTH_STATE_COOKIE)
+    saved = vk_upstream.verify_oauth_state(blob) if blob else None
+    if not saved or not state or saved.get("st") != state:
+        return _fail("Сессия ВК-входа истекла или state не совпал — попробуйте ещё раз")
+    if not code or not device_id:
+        return _fail("VK не вернул code/device_id")
+
+    try:
+        tokens = await vk_upstream.exchange_vk_code(
+            code=code, device_id=device_id, state=state, code_verifier=saved["cv"]
+        )
+        vk_user = await vk_upstream.fetch_vk_user(tokens["access_token"])
+        async with session_scope() as session:
+            user = await vk_upstream.find_or_create_user(session, vk_user)
+            resp = RedirectResponse(vk_upstream.safe_next(saved.get("next")), status_code=302)
+            set_session_cookie(resp, user)
+    except vk_upstream.VkUpstreamError as e:
+        return _fail(str(e))
+
+    # domain обязан совпасть с тем, на который куку ставили (см. vk_login),
+    # иначе браузер удалит не ту куку, а исходная доживёт свои 10 минут.
+    resp.delete_cookie(vk_upstream.OAUTH_STATE_COOKIE, domain=get_session_cookie_domain())
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# RP-initiated logout
+# ---------------------------------------------------------------------------
+
+
+async def _end_session(
+    request: Request,
+    *,
+    post_logout_redirect_uri: Optional[str],
+    client_id: Optional[str],
+    id_token_hint: Optional[str],
+    state: Optional[str],
+):
+    """Погасить куку ЕСА и увести человека туда, откуда он вышел.
+
+    Кука одна на весь ``.вмалмыже.рф``, так что это выход **из всех сервисов
+    сразу** — ровно то, чего не давал локальный logout сайта. Возврат к
+    клиенту — только в его зону; иначе своя страница входа с пометкой, а не
+    4xx в лицо человеку.
+    """
+    _check_enabled()
+    _enforce_ip_rate(request, "logout")
+
+    cid = (client_id or "").strip() or service.client_id_from_id_token_hint(id_token_hint)
+    target = None
+    if cid and post_logout_redirect_uri:
+        async with session_scope() as session:
+            client = await service.get_client(session, cid)
+        if service.post_logout_redirect_allowed(client, post_logout_redirect_uri):
+            target = post_logout_redirect_uri
+            if state:
+                sep = "&" if "?" in target else "?"
+                target = f"{target}{sep}{urlencode({'state': state})}"
+        else:
+            logger.warning(
+                "esa: logout client=%s post_logout_redirect_uri вне зоны клиента — на страницу входа",
+                cid,
+            )
+    resp = RedirectResponse(target or f"{LOGIN_PATH}?logged_out=1", status_code=302)
+    resp.delete_cookie(session_cookie_name(), domain=get_session_cookie_domain())
+    _audit.info(
+        "logout client=%s returned=%s user=%s",
+        cid or "-",
+        "client" if target else "login",
+        getattr(getattr(request.state, "user", None), "id", "-"),
+    )
+    return resp
+
+
+@router.get("/oidc/logout")
+async def end_session_get(
+    request: Request,
+    post_logout_redirect_uri: Optional[str] = None,
+    client_id: Optional[str] = None,
+    id_token_hint: Optional[str] = None,
+    state: Optional[str] = None,
+):
+    return await _end_session(
+        request,
+        post_logout_redirect_uri=post_logout_redirect_uri,
+        client_id=client_id,
+        id_token_hint=id_token_hint,
+        state=state,
+    )
+
+
+@router.post("/oidc/logout")
+async def end_session_post(
+    request: Request,
+    post_logout_redirect_uri: Optional[str] = Form(None),
+    client_id: Optional[str] = Form(None),
+    id_token_hint: Optional[str] = Form(None),
+    state: Optional[str] = Form(None),
+):
+    return await _end_session(
+        request,
+        post_logout_redirect_uri=post_logout_redirect_uri,
+        client_id=client_id,
+        id_token_hint=id_token_hint,
+        state=state,
+    )
+
+
+@router.get("/oidc/userinfo")
+async def userinfo(authorization: Optional[str] = Header(None)):
+    _check_enabled()
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Bearer token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    bearer = authorization.split(" ", 1)[1].strip()
+    async with session_scope() as session:
+        try:
+            return await service.userinfo(session, bearer)
+        except OidcError as e:
+            raise HTTPException(
+                status_code=401,
+                detail=e.description,
+                headers={"WWW-Authenticate": f'Bearer error="{e.error}"'},
+            )
